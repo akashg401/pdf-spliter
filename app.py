@@ -24,7 +24,8 @@ if split_mode == "Fixed number of pages":
         step=1
     )
 
-def clean_name(line):
+def clean_name(line: str) -> str:
+    """Clean the passenger name from a NAME: line."""
     clean = re.sub(r"NAME\s*[:\-]?\s*", "", line, flags=re.IGNORECASE).strip()
     clean = re.sub(r"\bASSIST.*", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\d+", "", clean)  # remove numbers
@@ -44,7 +45,7 @@ if uploaded_file and st.button("🚀 Run Splitter"):
                 text = page.extract_text() or ""
 
                 if "TRAVEL PROTECTION CARD" in text.upper():
-                    # Save previous policy first
+                    # Save previous policy before starting new
                     if current_writer and current_name:
                         pdf_bytes = io.BytesIO()
                         current_writer.write(pdf_bytes)
@@ -73,45 +74,4 @@ if uploaded_file and st.button("🚀 Run Splitter"):
                 pdf_bytes = io.BytesIO()
                 current_writer.write(pdf_bytes)
                 pdf_bytes.seek(0)
-                policies.append((current_name, pdf_bytes))
-
-    # === Mode 2: Fixed number of pages ===
-    elif pages_per_policy and pages_per_policy > 0:
-        total_policies = (len(reader.pages) + pages_per_policy - 1) // pages_per_policy
-        with pdfplumber.open(uploaded_file) as pdf:
-            for i in range(total_policies):
-                start_page = i * pages_per_policy
-                end_page = min(start_page + pages_per_policy, len(reader.pages))
-                writer = PdfWriter()
-                for j in range(start_page, end_page):
-                    writer.add_page(reader.pages[j])
-
-                # Extract passenger name from first page of split
-                raw_text = pdf.pages[start_page].extract_text() or ""
-                policy_name = None
-                for line in raw_text.splitlines():
-                    if "NAME" in line.upper():
-                        policy_name = clean_name(line)
-                        break
-                if not policy_name:
-                    policy_name = f"Policy_{i+1}"
-
-                pdf_bytes = io.BytesIO()
-                writer.write(pdf_bytes)
-                pdf_bytes.seek(0)
-                policies.append((policy_name, pdf_bytes))
-
-    # === Build ZIP file ===
-    if policies:
-        first_name = policies[0][0]
-        total_count = len(policies)
-        zip_name = f"{first_name}_x_{total_count}.zip"
-
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w") as zipf:
-            for policy_name, pdf_bytes in policies:
-                zipf.writestr(f"{policy_name}.pdf", pdf_bytes.read())
-
-        zip_buffer.seek(0)
-        st.success(f"✅ Done! Split into {total_count} policies")
-        st.download_button("⬇️ Download All Policies (ZIP)", zip_buffer, zip_name, "application/zip")
+                polic
