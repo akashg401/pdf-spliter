@@ -1,6 +1,3 @@
 streamlit
-pandas
-PyPDF2
-pdfplumber
-streamlit
 pypdf
+pdfplumber
