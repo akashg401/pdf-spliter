@@ -11,7 +11,7 @@ uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
 split_mode = st.radio(
     "How do you want to split?",
-    ["Detect by NAME :", "Fixed number of pages"]
+    ["Detect by TRAVEL PROTECTION CARD", "Fixed number of pages"]
 )
 
 pages_per_policy = None
@@ -34,39 +34,49 @@ if uploaded_file and st.button("🚀 Run Splitter"):
     reader = PdfReader(uploaded_file)
     policies = []  # store tuples (policy_name, pdf_bytes)
 
-    if split_mode == "Detect by NAME :":
+    # === Mode 1: Detect by keyword ===
+    if split_mode == "Detect by TRAVEL PROTECTION CARD":
         current_writer = None
         current_name = None
+
         with pdfplumber.open(uploaded_file) as pdf:
             for i, page in enumerate(pdf.pages):
                 text = page.extract_text() or ""
-                found_name = None
-                for line in text.splitlines():
-                    if "NAME" in line.upper():
-                        found_name = clean_name(line)
-                        break
 
-                if found_name and not current_writer:
-                    # Start new policy only if no active one
+                if "TRAVEL PROTECTION CARD" in text.upper():
+                    # Save previous policy first
+                    if current_writer and current_name:
+                        pdf_bytes = io.BytesIO()
+                        current_writer.write(pdf_bytes)
+                        pdf_bytes.seek(0)
+                        policies.append((current_name, pdf_bytes))
+
+                    # Start new policy
                     current_writer = PdfWriter()
                     current_writer.add_page(reader.pages[i])
-                    current_name = found_name
-                elif found_name and current_writer:
-                    # Ignore duplicate "NAME :" while inside a policy
-                    current_writer.add_page(reader.pages[i])
+
+                    # Extract passenger name
+                    current_name = None
+                    for line in text.splitlines():
+                        if "NAME" in line.upper():
+                            current_name = clean_name(line)
+                            break
+                    if not current_name:
+                        current_name = f"Policy_{len(policies)+1}"
                 else:
+                    # Add page to current policy
                     if current_writer:
                         current_writer.add_page(reader.pages[i])
 
-                # If this is the last page, close the policy
-                if i == len(pdf.pages) - 1 and current_writer and current_name:
-                    pdf_bytes = io.BytesIO()
-                    current_writer.write(pdf_bytes)
-                    pdf_bytes.seek(0)
-                    policies.append((current_name, pdf_bytes))
+            # Save last policy
+            if current_writer and current_name:
+                pdf_bytes = io.BytesIO()
+                current_writer.write(pdf_bytes)
+                pdf_bytes.seek(0)
+                policies.append((current_name, pdf_bytes))
 
-    else:
-        # Fixed-page mode
+    # === Mode 2: Fixed number of pages ===
+    elif pages_per_policy and pages_per_policy > 0:
         total_policies = (len(reader.pages) + pages_per_policy - 1) // pages_per_policy
         with pdfplumber.open(uploaded_file) as pdf:
             for i in range(total_policies):
@@ -76,7 +86,7 @@ if uploaded_file and st.button("🚀 Run Splitter"):
                 for j in range(start_page, end_page):
                     writer.add_page(reader.pages[j])
 
-                # Try to extract passenger name from first page of split
+                # Extract passenger name from first page of split
                 raw_text = pdf.pages[start_page].extract_text() or ""
                 policy_name = None
                 for line in raw_text.splitlines():
