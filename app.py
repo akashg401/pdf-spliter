@@ -20,7 +20,7 @@ if split_mode == "Fixed number of pages":
         "Enter number of pages per policy",
         min_value=1,
         max_value=50,
-        value=4,  # default
+        value=4,
         step=1
     )
 
@@ -38,4 +38,53 @@ if uploaded_file and st.button("🚀 Run Splitter"):
         if split_mode == "Detect by NAME :":
             # Dynamic detection mode
             current_writer = None
-            curre
+            current_name = None
+            with pdfplumber.open(uploaded_file) as pdf:
+                for i, page in enumerate(pdf.pages):
+                    text = page.extract_text() or ""
+                    # Check if this page starts a new policy
+                    found_name = None
+                    for line in text.splitlines():
+                        if "NAME" in line.upper():
+                            found_name = clean_name(line)
+                            break
+                    if found_name:
+                        # Save the previous policy before starting new
+                        if current_writer and current_name:
+                            pdf_bytes = io.BytesIO()
+                            current_writer.write(pdf_bytes)
+                            pdf_bytes.seek(0)
+                            zipf.writestr(f"{current_name}.pdf", pdf_bytes.read())
+                        # Start a new policy
+                        current_writer = PdfWriter()
+                        current_writer.add_page(reader.pages[i])
+                        current_name = found_name
+                    else:
+                        if current_writer:
+                            current_writer.add_page(reader.pages[i])
+                # Save last policy
+                if current_writer and current_name:
+                    pdf_bytes = io.BytesIO()
+                    current_writer.write(pdf_bytes)
+                    pdf_bytes.seek(0)
+                    zipf.writestr(f"{current_name}.pdf", pdf_bytes.read())
+
+        else:
+            # Fixed-page mode
+            if pages_per_policy and pages_per_policy > 0:
+                total_policies = (len(reader.pages) + pages_per_policy - 1) // pages_per_policy
+                for i in range(total_policies):
+                    start_page = i * pages_per_policy
+                    end_page = min(start_page + pages_per_policy, len(reader.pages))
+                    writer = PdfWriter()
+                    for j in range(start_page, end_page):
+                        writer.add_page(reader.pages[j])
+                    policy_name = f"Policy_{i+1}"
+                    pdf_bytes = io.BytesIO()
+                    writer.write(pdf_bytes)
+                    pdf_bytes.seek(0)
+                    zipf.writestr(f"{policy_name}.pdf", pdf_bytes.read())
+
+    zip_buffer.seek(0)
+    st.success("✅ Done! Policies have been split.")
+    st.download_button("⬇️ Download All Policies (ZIP)", zip_buffer, "policies.zip", "application/zip")
