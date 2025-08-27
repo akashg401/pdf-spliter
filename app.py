@@ -32,59 +32,76 @@ def clean_name(line):
 
 if uploaded_file and st.button("🚀 Run Splitter"):
     reader = PdfReader(uploaded_file)
-    zip_buffer = io.BytesIO()
+    policies = []  # store tuples (policy_name, pdf_bytes)
 
-    with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        if split_mode == "Detect by NAME :":
-            # Dynamic detection mode
-            current_writer = None
-            current_name = None
-            with pdfplumber.open(uploaded_file) as pdf:
-                for i, page in enumerate(pdf.pages):
-                    text = page.extract_text() or ""
-                    # Check if this page starts a new policy
-                    found_name = None
-                    for line in text.splitlines():
-                        if "NAME" in line.upper():
-                            found_name = clean_name(line)
-                            break
-                    if found_name:
-                        # Save the previous policy before starting new
-                        if current_writer and current_name:
-                            pdf_bytes = io.BytesIO()
-                            current_writer.write(pdf_bytes)
-                            pdf_bytes.seek(0)
-                            zipf.writestr(f"{current_name}.pdf", pdf_bytes.read())
-                        # Start a new policy
-                        current_writer = PdfWriter()
+    if split_mode == "Detect by NAME :":
+        current_writer = None
+        current_name = None
+        with pdfplumber.open(uploaded_file) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                found_name = None
+                for line in text.splitlines():
+                    if "NAME" in line.upper():
+                        found_name = clean_name(line)
+                        break
+
+                if found_name and not current_writer:
+                    # Start new policy only if no active one
+                    current_writer = PdfWriter()
+                    current_writer.add_page(reader.pages[i])
+                    current_name = found_name
+                elif found_name and current_writer:
+                    # Ignore duplicate "NAME :" while inside a policy
+                    current_writer.add_page(reader.pages[i])
+                else:
+                    if current_writer:
                         current_writer.add_page(reader.pages[i])
-                        current_name = found_name
-                    else:
-                        if current_writer:
-                            current_writer.add_page(reader.pages[i])
-                # Save last policy
-                if current_writer and current_name:
+
+                # If this is the last page, close the policy
+                if i == len(pdf.pages) - 1 and current_writer and current_name:
                     pdf_bytes = io.BytesIO()
                     current_writer.write(pdf_bytes)
                     pdf_bytes.seek(0)
-                    zipf.writestr(f"{current_name}.pdf", pdf_bytes.read())
+                    policies.append((current_name, pdf_bytes))
 
-        else:
-            # Fixed-page mode
-            if pages_per_policy and pages_per_policy > 0:
-                total_policies = (len(reader.pages) + pages_per_policy - 1) // pages_per_policy
-                for i in range(total_policies):
-                    start_page = i * pages_per_policy
-                    end_page = min(start_page + pages_per_policy, len(reader.pages))
-                    writer = PdfWriter()
-                    for j in range(start_page, end_page):
-                        writer.add_page(reader.pages[j])
+    else:
+        # Fixed-page mode
+        total_policies = (len(reader.pages) + pages_per_policy - 1) // pages_per_policy
+        with pdfplumber.open(uploaded_file) as pdf:
+            for i in range(total_policies):
+                start_page = i * pages_per_policy
+                end_page = min(start_page + pages_per_policy, len(reader.pages))
+                writer = PdfWriter()
+                for j in range(start_page, end_page):
+                    writer.add_page(reader.pages[j])
+
+                # Try to extract passenger name from first page of split
+                raw_text = pdf.pages[start_page].extract_text() or ""
+                policy_name = None
+                for line in raw_text.splitlines():
+                    if "NAME" in line.upper():
+                        policy_name = clean_name(line)
+                        break
+                if not policy_name:
                     policy_name = f"Policy_{i+1}"
-                    pdf_bytes = io.BytesIO()
-                    writer.write(pdf_bytes)
-                    pdf_bytes.seek(0)
-                    zipf.writestr(f"{policy_name}.pdf", pdf_bytes.read())
 
-    zip_buffer.seek(0)
-    st.success("✅ Done! Policies have been split.")
-    st.download_button("⬇️ Download All Policies (ZIP)", zip_buffer, "policies.zip", "application/zip")
+                pdf_bytes = io.BytesIO()
+                writer.write(pdf_bytes)
+                pdf_bytes.seek(0)
+                policies.append((policy_name, pdf_bytes))
+
+    # === Build ZIP file ===
+    if policies:
+        first_name = policies[0][0]
+        total_count = len(policies)
+        zip_name = f"{first_name}_x_{total_count}.zip"
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zipf:
+            for policy_name, pdf_bytes in policies:
+                zipf.writestr(f"{policy_name}.pdf", pdf_bytes.read())
+
+        zip_buffer.seek(0)
+        st.success(f"✅ Done! Split into {total_count} policies")
+        st.download_button("⬇️ Download All Policies (ZIP)", zip_buffer, zip_name, "application/zip")
