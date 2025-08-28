@@ -22,8 +22,11 @@ if split_mode == "Fixed number of pages":
 
 run = st.button("▶️ Run Splitter")
 
+# ===============================
+# Helpers
+# ===============================
 def clean_name(line: str) -> str:
-    # Remove "NAME :", digits, ASSIST_NO, etc.
+    """Clean raw line to extract policy name safely."""
     name = re.sub(r"NAME\s*[:\-]?\s*", "", line, flags=re.IGNORECASE)
     name = re.sub(r"\d+", "", name)  # remove numbers
     name = re.sub(r"ASSIST.*", "", name, flags=re.IGNORECASE)  # remove ASSIST text
@@ -31,10 +34,7 @@ def clean_name(line: str) -> str:
     return name if name else "Policy"
 
 def get_unique_name(name: str, existing_names: dict) -> str:
-    """
-    Returns a unique filename (without extension).
-    Example: Policy → Policy, Policy_1, Policy_2, ...
-    """
+    """Return unique name if duplicate already exists."""
     if name not in existing_names:
         existing_names[name] = 0
         return name
@@ -42,27 +42,34 @@ def get_unique_name(name: str, existing_names: dict) -> str:
         existing_names[name] += 1
         return f"{name}_{existing_names[name]}"
 
+# ===============================
+# Main Logic
+# ===============================
 if run and uploaded_file:
     reader = PdfReader(uploaded_file)
     policies = []
-    name_counter = {}  # track duplicates
+    name_counter = {}  # track duplicate names
 
+    pdf_bytes = io.BytesIO(uploaded_file.getvalue())  # make pdfplumber safe
     if split_mode == "Detect by TRAVEL PROTECTION CARD":
         current_writer = None
         current_name = None
 
-        with pdfplumber.open(uploaded_file) as pdf:
+        with pdfplumber.open(pdf_bytes) as pdf:
             for i, page in enumerate(pdf.pages):
-                text = page.extract_text() or ""
+                try:
+                    text = page.extract_text() or ""
+                except Exception:
+                    text = ""
 
                 if "TRAVEL PROTECTION CARD" in text.upper():
                     # Save previous policy
                     if current_writer and current_name:
-                        pdf_bytes = io.BytesIO()
-                        current_writer.write(pdf_bytes)
-                        pdf_bytes.seek(0)
+                        pdf_buf = io.BytesIO()
+                        current_writer.write(pdf_buf)
+                        pdf_buf.seek(0)
                         unique_name = get_unique_name(current_name, name_counter)
-                        policies.append((unique_name, pdf_bytes))
+                        policies.append((unique_name, pdf_buf))
 
                     # Start new policy
                     current_writer = PdfWriter()
@@ -81,17 +88,17 @@ if run and uploaded_file:
 
             # Save last policy
             if current_writer and current_name:
-                pdf_bytes = io.BytesIO()
-                current_writer.write(pdf_bytes)
-                pdf_bytes.seek(0)
+                pdf_buf = io.BytesIO()
+                current_writer.write(pdf_buf)
+                pdf_buf.seek(0)
                 unique_name = get_unique_name(current_name, name_counter)
-                policies.append((unique_name, pdf_bytes))
+                policies.append((unique_name, pdf_buf))
 
     elif split_mode == "Fixed number of pages":
         total_pages = len(reader.pages)
         num_policies = (total_pages + pages_per_policy - 1) // pages_per_policy
 
-        with pdfplumber.open(uploaded_file) as pdf:
+        with pdfplumber.open(pdf_bytes) as pdf:
             for i in range(num_policies):
                 start = i * pages_per_policy
                 end = min(start + pages_per_policy, total_pages)
@@ -101,7 +108,11 @@ if run and uploaded_file:
                     writer.add_page(reader.pages[j])
 
                 # Try to extract name
-                text = pdf.pages[start].extract_text() or ""
+                try:
+                    text = pdf.pages[start].extract_text() or ""
+                except Exception:
+                    text = ""
+
                 found_name = None
                 for line in text.splitlines():
                     if "NAME" in line.upper():
@@ -110,20 +121,22 @@ if run and uploaded_file:
                 current_name = found_name if found_name else f"Policy_{i+1}"
                 unique_name = get_unique_name(current_name, name_counter)
 
-                pdf_bytes = io.BytesIO()
-                writer.write(pdf_bytes)
-                pdf_bytes.seek(0)
-                policies.append((unique_name, pdf_bytes))
+                pdf_buf = io.BytesIO()
+                writer.write(pdf_buf)
+                pdf_buf.seek(0)
+                policies.append((unique_name, pdf_buf))
 
-    # === Build ZIP ===
+    # ===============================
+    # Build ZIP for download
+    # ===============================
     if policies:
         first_name = policies[0][0]
         zip_filename = f"{first_name}_x_{len(policies)}.zip"
 
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w") as zf:
-            for name, pdf_bytes in policies:
-                zf.writestr(f"{name}.pdf", pdf_bytes.getvalue())
+            for name, pdf_buf in policies:
+                zf.writestr(f"{name}.pdf", pdf_buf.getvalue())
         zip_buffer.seek(0)
 
         st.success(f"✅ Split into {len(policies)} policies!")
