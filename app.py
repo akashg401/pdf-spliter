@@ -1,121 +1,89 @@
 import streamlit as st
-from pypdf import PdfReader, PdfWriter
 import pdfplumber
-import io
-import zipfile
-import re
+from PyPDF2 import PdfWriter
+import os
 
-st.set_page_config(page_title="PDF Policy Splitter", layout="centered")
+# Output folder for split policies
+OUTPUT_FOLDER = "split_policies"
 
-st.title("📄 PDF Policy Splitter")
+if not os.path.exists(OUTPUT_FOLDER):
+    os.makedirs(OUTPUT_FOLDER)
 
-uploaded_file = st.file_uploader("Upload merged policy PDF", type=["pdf"])
+def get_unique_filename(base_name, ext=".pdf"):
+    """
+    Ensures duplicate policy names get saved with numbering.
+    Example: PolicyName.pdf, PolicyName_1.pdf, PolicyName_2.pdf
+    """
+    filename = f"{base_name}{ext}"
+    counter = 1
+    while os.path.exists(os.path.join(OUTPUT_FOLDER, filename)):
+        filename = f"{base_name}_{counter}{ext}"
+        counter += 1
+    return os.path.join(OUTPUT_FOLDER, filename)
 
-split_mode = st.radio(
-    "Choose split method:",
-    ["Detect by TRAVEL PROTECTION CARD", "Fixed number of pages"],
-)
+def split_policies(pdf_file):
+    """
+    Splits the uploaded PDF into separate policy files based on detected policy numbers/names.
+    """
+    policies_saved = []
 
-pages_per_policy = None
-if split_mode == "Fixed number of pages":
-    pages_per_policy = st.number_input("Enter pages per policy:", min_value=1, value=4)
-
-run = st.button("▶️ Run Splitter")
-
-def clean_name(line: str) -> str:
-    # Remove "NAME :", digits, ASSIST_NO, etc.
-    name = re.sub(r"NAME\s*[:\-]?\s*", "", line, flags=re.IGNORECASE)
-    name = re.sub(r"\d+", "", name)  # remove numbers
-    name = re.sub(r"ASSIST.*", "", name, flags=re.IGNORECASE)  # remove ASSIST text
-    name = name.strip().replace(" ", "_")
-    return name if name else "Policy"
-
-if run and uploaded_file:
-    reader = PdfReader(uploaded_file)
-    policies = []
-
-    if split_mode == "Detect by TRAVEL PROTECTION CARD":
-        current_writer = None
+    with pdfplumber.open(pdf_file) as pdf:
+        writer = None
         current_name = None
 
-        with pdfplumber.open(uploaded_file) as pdf:
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text() or ""
+        for page_num, page in enumerate(pdf.pages):
+            text = page.extract_text() or ""
 
-                if "TRAVEL PROTECTION CARD" in text.upper():
-                    # Save previous policy
-                    if current_writer and current_name:
-                        pdf_bytes = io.BytesIO()
-                        current_writer.write(pdf_bytes)
-                        pdf_bytes.seek(0)
-                        policies.append((current_name, pdf_bytes))
+            # Detect policy name/number (customize regex if needed)
+            for line in text.split("\n"):
+                if "Policy" in line and "No" in line:  # Example condition
+                    if writer and current_name:
+                        # Save previous policy
+                        file_path = get_unique_filename(current_name)
+                        with open(file_path, "wb") as f:
+                            writer.write(f)
+                        policies_saved.append(file_path)
 
                     # Start new policy
-                    current_writer = PdfWriter()
-                    current_writer.add_page(reader.pages[i])
+                    writer = PdfWriter()
+                    current_name = line.strip().replace(" ", "_").replace(":", "_")
+            
+            # Add page to current writer
+            if writer:
+                writer.add_page(pdf.pages[page_num].to_pdf_page())
 
-                    # Extract name
-                    found_name = None
-                    for line in text.splitlines():
-                        if "NAME" in line.upper():
-                            found_name = clean_name(line)
-                            break
-                    current_name = found_name if found_name else f"Policy_{len(policies)+1}"
-                else:
-                    if current_writer:
-                        current_writer.add_page(reader.pages[i])
+        # Save the last policy
+        if writer and current_name:
+            file_path = get_unique_filename(current_name)
+            with open(file_path, "wb") as f:
+                writer.write(f)
+            policies_saved.append(file_path)
 
-            # Save last policy
-            if current_writer and current_name:
-                pdf_bytes = io.BytesIO()
-                current_writer.write(pdf_bytes)
-                pdf_bytes.seek(0)
-                policies.append((current_name, pdf_bytes))
+    return policies_saved
 
-    elif split_mode == "Fixed number of pages":
-        total_pages = len(reader.pages)
-        num_policies = (total_pages + pages_per_policy - 1) // pages_per_policy
 
-        with pdfplumber.open(uploaded_file) as pdf:
-            for i in range(num_policies):
-                start = i * pages_per_policy
-                end = min(start + pages_per_policy, total_pages)
+# =========================
+# Streamlit UI
+# =========================
+st.set_page_config(page_title="Policy PDF Splitter", layout="centered")
 
-                writer = PdfWriter()
-                for j in range(start, end):
-                    writer.add_page(reader.pages[j])
+st.title("📄 Policy PDF Splitter")
+st.write("Upload a combined policy PDF, and this tool will split it into individual policies.")
 
-                # Try to extract name
-                text = pdf.pages[start].extract_text() or ""
-                found_name = None
-                for line in text.splitlines():
-                    if "NAME" in line.upper():
-                        found_name = clean_name(line)
-                        break
-                current_name = found_name if found_name else f"Policy_{i+1}"
+uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"])
 
-                pdf_bytes = io.BytesIO()
-                writer.write(pdf_bytes)
-                pdf_bytes.seek(0)
-                policies.append((current_name, pdf_bytes))
+if uploaded_pdf:
+    with st.spinner("Processing PDF..."):
+        saved_files = split_policies(uploaded_pdf)
 
-    # === Build ZIP ===
-    if policies:
-        first_name = policies[0][0]
-        zip_filename = f"{first_name}_x_{len(policies)}.zip"
+    st.success(f"✅ Done! {len(saved_files)} policies extracted.")
+    st.write("Download split files below:")
 
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w") as zf:
-            for name, pdf_bytes in policies:
-                zf.writestr(f"{name}.pdf", pdf_bytes.getvalue())
-        zip_buffer.seek(0)
-
-        st.success(f"✅ Split into {len(policies)} policies!")
-        st.download_button(
-            label="⬇️ Download ZIP",
-            data=zip_buffer,
-            file_name=zip_filename,
-            mime="application/zip",
-        )
-    else:
-        st.error("❌ No policies detected. Check the PDF or mode.")
+    for f in saved_files:
+        with open(f, "rb") as file:
+            st.download_button(
+                label=f"⬇️ Download {os.path.basename(f)}",
+                data=file,
+                file_name=os.path.basename(f),
+                mime="application/pdf"
+            )
