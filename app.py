@@ -30,8 +30,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============== TITLE =================
-st.title("📄 PDF Tools")
-st.tooltip("Made by AG with ❤️")  # tooltip on title
+st.markdown(
+    """
+    <h1 title="Made by AG with ❤️">📄 PDF Tools</h1>
+    """,
+    unsafe_allow_html=True
+)
 
 # Navigation
 choice = st.sidebar.radio("Choose Tool", ["🔹 Split PDF", "🔹 Merge PDF"])
