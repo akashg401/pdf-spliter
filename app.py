@@ -19,7 +19,7 @@ st.markdown(
     """
     <style>
     body {
-        background-color: #f5f5f5;
+        background-color: #f5eded;
     }
     .big-card {
         border: 1px solid #e6e6e6;
