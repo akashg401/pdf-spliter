@@ -381,17 +381,20 @@ if st.session_state["page"] == "split":
     # NEW: Invoice splitter
     # -------------------------
     if split_feature == "Invoices (Asego Global)":
-        uploaded_file = st.file_uploader("Upload merged invoices PDF", type=["pdf"])
+    uploaded_file = st.file_uploader(
+        "Upload merged invoices PDF",
+        type=["pdf"]
+    )
 
-      trigger_text = st.text_input(
-    "Text that marks start of each invoice (client name / header)",
-    value="",
-    placeholder="e.g. ASEGO GLOBAL INSURANCE",
-    help="Each time this text appears on a new page, a new invoice is assumed to start."
-)
+    trigger_text = st.text_input(
+        "Text that marks start of each invoice (client name / header)",
+        value="",
+        placeholder="e.g. ASEGO GLOBAL INSURANCE",
+        help="Each time this text appears on a new page, a new invoice is assumed to start."
+    )
 
+    run_invoice = st.button("▶️ Run Invoice Splitter")
 
-        run_invoice = st.button("▶️ Run Invoice Splitter")
 
         if run_invoice:
             if not uploaded_file:
