@@ -18,9 +18,9 @@ st.set_page_config(page_title="📄 PDF Tools", layout="centered", initial_sideb
 st.markdown(
     """
     <style>
-    body {
-        background-color: #f5eded;
-    }
+   .stApp {
+    background-color: #f7f7f8;
+}
     .big-card {
         border: 1px solid #e6e6e6;
         border-radius: 12px;
@@ -166,20 +166,22 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
         except ValueError:
             total_members = None
 
-    # First member name (Sr. No. 1 row)
+        # First member name (Sr. No. 1 row)
     first_member = None
     header_idx = full_text.lower().find("name of member")
     segment = full_text[header_idx:] if header_idx != -1 else full_text
 
-    # Typical row example:
+    # Example row in your PDF:
     # "1 PALANISAMY AYYADURAI 0 110070081838 70081838 118.64 21.36 140.00"
+    # The key fix: make the name group GREEDY (no "?"), so it captures the full name.
     m2 = re.search(
-        r"\b1\s+([A-Z][A-Za-z\s\.'-]+?)\s+\S+\s+\S+\s+[0-9.,]+\s+[0-9.,]+\s+[0-9.,]+",
+        r"\b1\s+([A-Z][A-Za-z\s\.'-]+)\s+\S+\s+\S+\s+[0-9.,]+\s+[0-9.,]+\s+[0-9.,]+",
         segment,
-        flags=re.MULTILINE
+        flags=re.MULTILINE | re.IGNORECASE
     )
     if m2:
-        first_member = m2.group(1).strip()
+        first_member = re.sub(r"\s+", " ", m2.group(1)).strip()
+
 
     return invoice_no, total_members, first_member
 
@@ -220,7 +222,7 @@ if st.session_state["page"] == "split":
     # Select feature: existing Policies or new Invoices
     split_feature = st.radio(
         "What do you want to split?",
-        ["Policies (existing)", "Invoices (Asego / Adiona)"],
+        ["Policies (existing)", "Invoices (Asego Global)"],
         index=0
     )
 
@@ -378,14 +380,16 @@ if st.session_state["page"] == "split":
     # -------------------------
     # NEW: Invoice splitter
     # -------------------------
-    if split_feature == "Invoices (Asego / Adiona)":
+    if split_feature == "Invoices (Asego Global)":
         uploaded_file = st.file_uploader("Upload merged invoices PDF", type=["pdf"])
 
-        trigger_text = st.text_input(
-            "Text that marks start of each invoice (client name / header)",
-            value="ADIONA TRAVELS PVT LTD",
-            help="Each time this text appears on a new page, a new invoice is assumed to start."
-        )
+      trigger_text = st.text_input(
+    "Text that marks start of each invoice (client name / header)",
+    value="",
+    placeholder="e.g. ASEGO GLOBAL INSURANCE",
+    help="Each time this text appears on a new page, a new invoice is assumed to start."
+)
+
 
         run_invoice = st.button("▶️ Run Invoice Splitter")
 
