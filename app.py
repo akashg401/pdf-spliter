@@ -377,24 +377,23 @@ if st.session_state["page"] == "split":
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
-    # -------------------------
+        # -------------------------
     # NEW: Invoice splitter
     # -------------------------
     if split_feature == "Invoices (Asego Global)":
-    uploaded_file = st.file_uploader(
-        "Upload merged invoices PDF",
-        type=["pdf"]
-    )
+        uploaded_file = st.file_uploader(
+            "Upload merged invoices PDF",
+            type=["pdf"]
+        )
 
-    trigger_text = st.text_input(
-        "Text that marks start of each invoice (client name / header)",
-        value="",
-        placeholder="e.g. ASEGO GLOBAL INSURANCE",
-        help="Each time this text appears on a new page, a new invoice is assumed to start."
-    )
+        trigger_text = st.text_input(
+            "Text that marks start of each invoice (client name / header)",
+            value="",
+            placeholder="e.g. ASEGO GLOBAL INSURANCE",
+            help="Each time this text appears on a new page, a new invoice is assumed to start."
+        )
 
-    run_invoice = st.button("▶️ Run Invoice Splitter")
-
+        run_invoice = st.button("▶️ Run Invoice Splitter")
 
         if run_invoice:
             if not uploaded_file:
@@ -437,7 +436,9 @@ if st.session_state["page"] == "split":
                                 progress.progress(pages_processed / total_pages)
                                 status.text(f"Processing pages: {pages_processed} / {total_pages}")
 
-                            invoice_no, total_members, first_member = extract_invoice_metadata(pdf, start, end)
+                            invoice_no, total_members, first_member = extract_invoice_metadata(
+                                pdf, start, end
+                            )
 
                             if first_member and total_members:
                                 base_name = f"{first_member} x {total_members}"
@@ -476,11 +477,9 @@ if st.session_state["page"] == "split":
                     st.success(f"✅ Split complete — {len(invoices)} invoice files created.")
                     st.write(f"⏱ Runtime: {runtime:.2f} seconds")
 
-                    # Summary table
                     df = pd.DataFrame(summary_rows)
                     st.dataframe(df, use_container_width=True)
 
-                    # CSV download
                     csv_bytes = df.to_csv(index=False).encode("utf-8")
                     st.download_button(
                         "⬇️ Download CSV summary",
@@ -489,17 +488,16 @@ if st.session_state["page"] == "split":
                         mime="text/csv"
                     )
 
-                    # ZIP of invoices
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w") as zf:
                         for name, buf in invoices:
                             zf.writestr(f"{name}.pdf", buf.getvalue())
                     zip_buffer.seek(0)
-                    zip_filename = f"invoices_x_{len(invoices)}.zip"
+
                     st.download_button(
                         "⬇️ Download ZIP of invoices",
                         data=zip_buffer,
-                        file_name=zip_filename,
+                        file_name=f"invoices_x_{len(invoices)}.zip",
                         mime="application/zip"
                     )
                 else:
