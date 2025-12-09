@@ -370,21 +370,39 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
             invoice_no = m.group(1).strip()
             break
 
-    # ---------- Limit to table area (before 'Total Amount') ----------
-    area = full_text
+    # ---------- Narrow down to the traveller table ----------
+    lower = full_text.lower()
+
+    # Try to start from the Sr. No. / traveller header
+    start_tbl = lower.find("sr. no.")
+    if start_tbl == -1:
+        start_tbl = lower.find("sr no")
+    if start_tbl == -1:
+        start_tbl = lower.find("name of traveller")
+    if start_tbl == -1:
+        start_tbl = lower.find("name of member")
+
+    if start_tbl != -1:
+        area = full_text[start_tbl:]
+    else:
+        area = full_text
+
+    # Cut off after 'Total Amount' if present
     idx_total = area.lower().find("total amount")
     if idx_total != -1:
         area = area[:idx_total]
 
-    # ---------- Sr. No. rows for both formats ----------
-    # Example old: "1 ROHIT BHALLA 0 110070112795 70012795 118.64 ... "
-    # Example new: "01. ANCHAL NARAYAN IC83152 2396.62 431.38 2828.00"
-    # We want:
-    #   group(1) -> "1" or "01"
-    #   group(2) -> "ROHIT BHALLA" / "ANCHAL NARAYAN"
+    # ---------- Sr. No. rows ----------
+    # We ONLY want lines that actually look like:
+    #   "1 ROHIT BHALLA 0 110070112795 ..."
+    #   "01. ANCHAL NARAYAN IC83152 2396.62 ..."
+    #
+    # Key fixes:
+    #   - use [ \t]+ instead of \s+ so we DO NOT cross newlines
+    #   - capture multi-word names (ROHIT BHALLA / ANCHAL NARAYAN)
     sr_pattern = re.compile(
-        r"^\s*(\d+)\.?\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*)\s+\S+",
-        flags=re.MULTILINE
+        r"^\s*(\d+)\.?\s+([A-Z][A-Za-z\.'-]*(?:\s+[A-Z][A-Za-z\.'-]*)*)[ \t]+\S+",
+        flags=re.MULTILINE,
     )
 
     matches = list(sr_pattern.finditer(area))
