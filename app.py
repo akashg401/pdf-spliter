@@ -102,8 +102,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
       - Date of Birth
       - Passport Number
 
-    Designed specifically for the ICICI Lombard + Zurich Kotak formats
-    in your sample PDF. :contentReference[oaicite:1]{index=1}
+    Designed for the ICICI Lombard / Asego-style policies in your sample PDFs.
     """
     meta = {
         "Name": "",
@@ -114,8 +113,12 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         "Passport Number": "",
     }
 
+    def first_match(pattern: str, flags=re.IGNORECASE):
+        m = re.search(pattern, full_text, flags)
+        return m.group(1).strip() if m else ""
+
     # -------------------------
-    # Assist No (Travel Protection Card / Certificate)
+    # Assist No (Travel card / certificate)
     # -------------------------
     assist = ""
     m = re.search(
@@ -124,7 +127,6 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         flags=re.IGNORECASE,
     )
     if not m:
-        # Fallback: certificate number line
         m = re.search(
             r"Certificate\s+No\s*[:.]?\s*([A-Z0-9]+)",
             full_text,
@@ -132,33 +134,44 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         )
     if m:
         candidate = m.group(1).strip()
-        # Hard filter: must contain at least one digit and be at least 5 chars
+        # Hard filter: must contain at least one digit and be at least 5 characters
         if re.search(r"\d", candidate) and len(candidate) >= 5:
             assist = candidate
-
     meta["Assist No"] = assist
 
-    
     # -------------------------
-    # Name (Insured Name:, with hard stop before next field)
+    # Name
     # -------------------------
+    name = ""
+
+    # Primary: "Insured Name: SACHIN GOEL Date of Birth: ..."
     m = re.search(
-        r"Insured\s+Name\s*:\s*([A-Z][A-Z\s\.'-]+?)(?=\s+Date\s+of\s+Birth|\s+Passport\s+Number|$)",
+        r"Insured\s+Name\s*:\s*([A-Za-z][A-Za-z\s\.'-]+?)(?=\s+Date\s+of\s+Birth|\s+Passport\s+Number|$)",
         full_text,
         flags=re.IGNORECASE,
     )
     if not m:
-        # Fallback: Traveller header on Travel Protection Card
+        # Fallback: "Traveller" header on card layout
         m = re.search(
-            r"Traveller\s*\n\s*([A-Z][A-Z\s\.'-]+)",
+            r"Traveller\s*\n\s*([A-Za-z][A-Za-z\s\.'-]+)",
             full_text,
             flags=re.IGNORECASE,
         )
 
+    if not m:
+        # Very generic fallback (avoid "Name of")
+        m = re.search(
+            r"\bName\s*:\s*([A-Za-z][A-Za-z\s\.'-]+)",
+            full_text,
+            flags=re.IGNORECASE,
+        )
+        if m and "name of" in m.group(0).lower():
+            m = None
+
     if m:
         name = m.group(1)
         name = re.sub(r"\s+", " ", name).strip()
-        meta["Name"] = name
+    meta["Name"] = name
 
     # -------------------------
     # Start / End Date
@@ -166,14 +179,14 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     start_date = ""
     end_date = ""
 
-    # 1) ICICI certificate: "Commencement Date: From: dd/mm/yyyy End Date: dd/mm/yyyy"
+    # 1) "Commencement Date: From: dd/mm/yyyy End Date: dd/mm/yyyy"
     m = re.search(
         r"Commencement\s+Date\s*:\s*From\s*:\s*([0-9/]+)\s*End\s*Date\s*:\s*([0-9/]+)",
         full_text,
         flags=re.IGNORECASE,
     )
     if not m:
-        # 2) Travel Protection Card layout
+        # 2) "Start Date\n<date> ... End Date\n<date>"
         m = re.search(
             r"Start\s*Date\s*\n\s*([0-9/]+).*?End\s*Date\s*\n\s*([0-9/]+)",
             full_text,
@@ -197,24 +210,16 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     # -------------------------
     # Date of Birth
     # -------------------------
-    m = re.search(
-        r"Date\s+of\s+Birth\s*[:\-]?\s*([0-9/]+)",
-        full_text,
-        flags=re.IGNORECASE,
+    meta["Date of Birth"] = first_match(
+        r"Date\s+of\s+Birth\s*[:\-]?\s*([0-9/]+)"
     )
-    if m:
-        meta["Date of Birth"] = m.group(1).strip()
 
     # -------------------------
     # Passport Number
     # -------------------------
-    m = re.search(
-        r"Passport\s+Number\s*[:\-]?\s*([A-Z0-9]+)",
-        full_text,
-        flags=re.IGNORECASE,
+    meta["Passport Number"] = first_match(
+        r"Passport\s+Number\s*[:\-]?\s*([A-Z0-9]+)"
     )
-    if m:
-        meta["Passport Number"] = m.group(1).strip()
 
     return meta
 
@@ -416,8 +421,9 @@ if st.session_state["page"] == "split":
         ["Policies (existing)", "Invoices (Asego Global)"],
         index=0
     )
-    # -------------------------
-    # Existing POLICY splitter (rewritten, robust)
+
+        # -------------------------
+    # POLICY splitter (existing) – cleaned & debug-friendly
     # -------------------------
     if split_feature == "Policies (existing)":
         uploaded_file = st.file_uploader("Upload merged policy PDF", type=["pdf"])
@@ -437,7 +443,6 @@ if st.session_state["page"] == "split":
             "Debug policies: show parsed text and metadata",
             value=False
         )
-
 
         run = st.button("▶️ Run Splitter")
 
@@ -486,23 +491,23 @@ if st.session_state["page"] == "split":
                                 if is_new_card:
                                     # finalize previous policy
                                     if current_writer is not None and current_text_parts:
-                                     full_text = "\n".join(current_text_parts)
-                                     meta = extract_policy_metadata_from_text(full_text)
-                                        
-                                    base_name = build_policy_filename(
+                                        full_text = "\n".join(current_text_parts)
+                                        meta = extract_policy_metadata_from_text(full_text)
+
+                                        base_name = build_policy_filename(
                                             meta.get("Name", ""),
                                             meta.get("Assist No", "")
                                         )
-                                    if not base_name:
-                                        base_name = f"Policy_{len(policies) + 1}"
-                                        
+                                        if not base_name:
+                                            base_name = f"Policy_{len(policies) + 1}"
+
                                         unique_name = get_unique_name(base_name, name_counter)
-                                        
+
                                         buf = io.BytesIO()
                                         current_writer.write(buf)
                                         buf.seek(0)
                                         policies.append((unique_name, buf))
-                                        
+
                                         policy_summary_rows.append({
                                             "#": len(policy_summary_rows) + 1,
                                             "Filename": f"{unique_name}.pdf",
@@ -513,11 +518,8 @@ if st.session_state["page"] == "split":
                                             "Date of Birth": meta.get("Date of Birth", ""),
                                             "Passport Number": meta.get("Passport Number", ""),
                                         })
-                                        
-                                        # NEW: debug storage
                                         policy_texts.append(full_text)
                                         policy_meta_list.append(meta)
-
 
                                     # start new policy
                                     current_writer = PdfWriter()
@@ -558,6 +560,8 @@ if st.session_state["page"] == "split":
                                     "Date of Birth": meta.get("Date of Birth", ""),
                                     "Passport Number": meta.get("Passport Number", ""),
                                 })
+                                policy_texts.append(full_text)
+                                policy_meta_list.append(meta)
                     except Exception as e:
                         st.error("Error while parsing PDF text. The file might be scanned or corrupted.")
                         st.exception(e)
@@ -618,13 +622,11 @@ if st.session_state["page"] == "split":
                                     "Date of Birth": meta.get("Date of Birth", ""),
                                     "Passport Number": meta.get("Passport Number", ""),
                                 })
+                                policy_texts.append(full_text)
+                                policy_meta_list.append(meta)
                     except Exception as e:
                         st.error("Error while processing PDF.")
                         st.exception(e)
-
-                policy_texts.append(full_text)
-                policy_meta_list.append(meta)
-
 
                 progress.progress(1.0)
                 status.text("Finalizing...")
@@ -634,7 +636,7 @@ if st.session_state["page"] == "split":
                     st.success(f"✅ Split complete — {len(policies)} policy files created.")
                     st.write(f"⏱ Runtime: {runtime:.2f} seconds")
 
-                    # Build DataFrame from summary rows
+                    # Summary table
                     if policy_summary_rows:
                         df = pd.DataFrame(policy_summary_rows)
                     else:
@@ -642,19 +644,17 @@ if st.session_state["page"] == "split":
                             [(i + 1, name) for i, (name, buf) in enumerate(policies)],
                             columns=["#", "Filename"]
                         )
-
                     st.dataframe(df, use_container_width=True)
 
-                    # Debug output
+                    # Debug view for policies
                     if debug_policies and policy_texts:
-                        st.markdown("#### Debug: raw text and parsed metadata")
+                        st.markdown("#### Debug: raw text and parsed metadata (policies)")
                         for row, text, meta in zip(policy_summary_rows, policy_texts, policy_meta_list):
                             with st.expander(f"Policy {row['#']} – {row['Filename']}"):
                                 st.write("Parsed metadata:", meta)
                                 st.text(text[:4000])
 
-
-                    # ZIP only
+                    # ZIP download
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w") as zf:
                         for name, buf in policies:
