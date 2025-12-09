@@ -548,9 +548,9 @@ if st.session_state["page"] == "split":
                         st.error("Error while processing PDF.")
                         st.exception(e)
 
-                progress.progress(1.0)
-                status.text("Finalizing...")
-                runtime = time.time() - start_time
+            progress.progress(1.0)
+            status.text("Finalizing...")
+            runtime = time.time() - start_time
 
 
                 if policies:
