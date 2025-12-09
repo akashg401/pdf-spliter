@@ -96,13 +96,11 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     """
     Extract policy-level metadata from one policy's text:
       - Name
-      - Assist No
+      - Assist No (Travel Assist / Certificate No / Card code)
       - Start Date
       - End Date
       - Date of Birth
       - Passport Number
-
-    Designed for the ICICI Lombard / Asego-style policies in your sample PDFs.
     """
     meta = {
         "Name": "",
@@ -113,30 +111,65 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         "Passport Number": "",
     }
 
+    def clean_name(raw: str) -> str:
+        if not raw:
+            return ""
+        name = re.sub(r"\s+", " ", raw).strip()
+        # Cut off any field labels trailing the name
+        cut_markers = [" date of", " dob", " passport", " age"]
+        lower = name.lower()
+        for marker in cut_markers:
+            idx = lower.find(marker)
+            if idx != -1:
+                name = name[:idx]
+                break
+        name = re.sub(r"\s+", " ", name).strip()
+        return name
+
     def first_match(pattern: str, flags=re.IGNORECASE):
         m = re.search(pattern, full_text, flags)
         return m.group(1).strip() if m else ""
 
     # -------------------------
-    # Assist No (Travel card / certificate)
+    # Assist No (Travel card / certificate / code)
     # -------------------------
     assist = ""
+
+    # 1) Explicit "Assist No."
     m = re.search(
         r"Assist\s*No\.?\s*[:.]?\s*([A-Z0-9]+)",
         full_text,
         flags=re.IGNORECASE,
     )
-    if not m:
+    if m:
+        candidate = m.group(1).strip()
+        if re.search(r"\d", candidate) and len(candidate) >= 5:
+            assist = candidate
+
+    # 2) Certificate No
+    if not assist:
         m = re.search(
             r"Certificate\s+No\s*[:.]?\s*([A-Z0-9]+)",
             full_text,
             flags=re.IGNORECASE,
         )
-    if m:
-        candidate = m.group(1).strip()
-        # Hard filter: must contain at least one digit and be at least 5 characters
-        if re.search(r"\d", candidate) and len(candidate) >= 5:
-            assist = candidate
+        if m:
+            candidate = m.group(1).strip()
+            if re.search(r"\d", candidate) and len(candidate) >= 5:
+                assist = candidate
+
+    # 3) Travel Protection Card line: code directly under the heading
+    if not assist:
+        m = re.search(
+            r"Travel\s+Protection\s+Card\s*[\r\n]+([A-Z0-9]{5,})",
+            full_text,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            candidate = m.group(1).strip()
+            if re.search(r"\d", candidate):
+                assist = candidate
+
     meta["Assist No"] = assist
 
     # -------------------------
@@ -144,33 +177,35 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     # -------------------------
     name = ""
 
-    # Primary: "Insured Name: SACHIN GOEL Date of Birth: ..."
+    # Primary: one-line "Insured Name: <name> Date of Birth ..."
     m = re.search(
-        r"Insured\s+Name\s*:\s*([A-Za-z][A-Za-z\s\.'-]+?)(?=\s+Date\s+of\s+Birth|\s+Passport\s+Number|$)",
+        r"Insured\s+Name\s*:\s*([^\r\n]+)",
         full_text,
         flags=re.IGNORECASE,
     )
-    if not m:
-        # Fallback: "Traveller" header on card layout
-        m = re.search(
-            r"Traveller\s*\n\s*([A-Za-z][A-Za-z\s\.'-]+)",
-            full_text,
-            flags=re.IGNORECASE,
-        )
-
-    if not m:
-        # Very generic fallback (avoid "Name of")
-        m = re.search(
-            r"\bName\s*:\s*([A-Za-z][A-Za-z\s\.'-]+)",
-            full_text,
-            flags=re.IGNORECASE,
-        )
-        if m and "name of" in m.group(0).lower():
-            m = None
-
     if m:
-        name = m.group(1)
-        name = re.sub(r"\s+", " ", name).strip()
+        name = clean_name(m.group(1))
+
+    # Fallback: "Traveller" header + next-line name (on card)
+    if not name:
+        m = re.search(
+            r"Traveller\s*[\r\n]+([A-Za-z][A-Za-z\s\.'-]+)",
+            full_text,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            name = clean_name(m.group(1))
+
+    # Very generic fallback: "Name: ..." but not "Name of ..."
+    if not name:
+        m = re.search(
+            r"\bName\s*:\s*([^\r\n]+)",
+            full_text,
+            flags=re.IGNORECASE,
+        )
+        if m and "name of" not in m.group(0).lower():
+            name = clean_name(m.group(1))
+
     meta["Name"] = name
 
     # -------------------------
@@ -186,7 +221,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         flags=re.IGNORECASE,
     )
     if not m:
-        # 2) "Start Date\n<date> ... End Date\n<date>"
+        # 2) On card: Start Date\n<date> ... End Date\n<date>
         m = re.search(
             r"Start\s*Date\s*\n\s*([0-9/]+).*?End\s*Date\s*\n\s*([0-9/]+)",
             full_text,
