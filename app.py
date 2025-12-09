@@ -336,95 +336,59 @@ def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tup
     return ranges
 
 
-def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
-    """
-    Extract invoice metadata from pages [start_idx, end_idx]:
+       def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
+           """
+           Extract invoice metadata from pages [start_idx, end_idx] using table extraction for robustness.
+           """
+           full_text = ""  # For debugging, still collect text
+           traveller_rows = []  # List of (sr_no, name) tuples
 
-      - invoice_no: e.g. 12298282 or INV-10124343
-      - total_members: highest Sr. No. in traveller table
-      - first_member: full name of Sr. No. 1
-      - full_text: concatenated text (for debugging)
+           for i in range(start_idx, end_idx + 1):
+               page = pdf.pages[i]
+               full_text += (page.extract_text() or "") + "\n"
 
-    Works for:
-      - Old Adiona invoices: 'Sr. No. / Name of Member ...'
-      - New Matrix invoices: 'Sr. No. Name of Traveller ...'
-    """
-    texts: List[str] = []
-    for i in range(start_idx, end_idx + 1):
-        try:
-            t = pdf.pages[i].extract_text() or ""
-        except Exception:
-            t = ""
-        texts.append(t)
+               # Extract tables from the page
+               tables = page.extract_tables()
+               for table in tables:
+                   if not table:
+                       continue
+                   # Check if this is the traveller table by looking for headers
+                   headers = [cell.strip().lower() if cell else "" for cell in table[0]]
+                   if any("sr. no" in h or "name of traveller" in h or "name of member" in h for h in headers):
+                       # Assume first column is Sr. No., second is Name (adjust if needed based on format)
+                       for row in table[1:]:  # Skip header
+                           if len(row) >= 2 and row[0] and row[1]:
+                               try:
+                                   sr_no = int(re.sub(r'\D', '', str(row[0]).strip()))  # Extract digits for Sr. No.
+                                   name = str(row[1]).strip()
+                                   # Clean name: remove extra spaces, allow mixed case
+                                   name = re.sub(r'\s+', ' ', name).strip()
+                                   if name and re.match(r'^[A-Za-z\s\.\'-]+$', name):  # Basic validation
+                                       traveller_rows.append((sr_no, name))
+                               except ValueError:
+                                   continue  # Skip invalid rows
 
-    full_text = "\n".join(texts)
+           # Process extracted rows
+           total_members = max((sr for sr, _ in traveller_rows), default=0) if traveller_rows else 0
+           first_member = ""
+           if traveller_rows:
+               # Get the row with the smallest Sr. No.
+               min_sr_row = min(traveller_rows, key=lambda x: x[0])
+               first_member = min_sr_row[1]
 
-    # ---------- Invoice number ----------
-    invoice_no = ""
-    for pattern in [
-        r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
-        r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
-    ]:
-        m = re.search(pattern, full_text, flags=re.IGNORECASE)
-        if m:
-            invoice_no = m.group(1).strip()
-            break
+           # Extract invoice_no from full_text (keep existing logic)
+           invoice_no = ""
+           for pattern in [
+               r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+               r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+           ]:
+               m = re.search(pattern, full_text, flags=re.IGNORECASE)
+               if m:
+                   invoice_no = m.group(1).strip()
+                   break
 
-    # ---------- Narrow down to the traveller table ----------
-    lower = full_text.lower()
-
-    # Try to start from the Sr. No. / traveller header
-    start_tbl = lower.find("sr. no.")
-    if start_tbl == -1:
-        start_tbl = lower.find("sr no")
-    if start_tbl == -1:
-        start_tbl = lower.find("name of traveller")
-    if start_tbl == -1:
-        start_tbl = lower.find("name of member")
-
-    if start_tbl != -1:
-        area = full_text[start_tbl:]
-    else:
-        area = full_text
-
-    # Cut off after 'Total Amount' if present
-    idx_total = area.lower().find("total amount")
-    if idx_total != -1:
-        area = area[:idx_total]
-
-    # ---------- Sr. No. rows ----------
-    # We ONLY want lines that actually look like:
-    #   "1 ROHIT BHALLA 0 110070112795 ..."
-    #   "01. ANCHAL NARAYAN IC83152 2396.62 ..."
-    #
-    # Key fixes:
-    #   - use [ \t]+ instead of \s+ so we DO NOT cross newlines
-    #   - capture multi-word names (ROHIT BHALLA / ANCHAL NARAYAN)
-    sr_pattern = re.compile(
-        r"^\s*(\d+)\.?\s+([A-Z][A-Za-z\.'-]*(?:\s+[A-Z][A-Za-z\.'-]*)*)[ \t]+\S+",
-        flags=re.MULTILINE,
-    )
-
-    matches = list(sr_pattern.finditer(area))
-
-    total_members = 0
-    first_member = ""
-
-    if matches:
-        # Total pax = highest Sr. No.
-        try:
-            total_members = max(int(m.group(1)) for m in matches)
-        except ValueError:
-            total_members = 0
-
-        # First pax = smallest Sr. No. (normally 1 / 01)
-        first_match = min(matches, key=lambda m: int(m.group(1)))
-        first_member_raw = first_match.group(2)
-        first_member = re.sub(r"\s+", " ", first_member_raw).strip()
-
-    return invoice_no, total_members, first_member, full_text
-
-
+           return invoice_no, total_members, first_member, full_text
+       
 # -------------------------
 # Home page
 # -------------------------
