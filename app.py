@@ -268,7 +268,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         start_date = m.group(1).strip()
         end_date = m.group(2).strip()
 
-       def normalize_date(s: str) -> str:
+    def normalize_date(s: str) -> str:
         if not s:
             return ""
         # Accept simple dd/mm/yy or dd/mm/yyyy; anything else is dropped
