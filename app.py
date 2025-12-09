@@ -493,8 +493,8 @@ if st.session_state["page"] == "split":
                                             meta.get("Name", ""),
                                             meta.get("Assist No", "")
                                         )
-                                        if not base_name:
-                                            base_name = f"Policy_{len(policies) + 1}"
+                                    if not base_name:
+                                        base_name = f"Policy_{len(policies) + 1}"
                                         
                                         unique_name = get_unique_name(base_name, name_counter)
                                         
