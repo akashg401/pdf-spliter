@@ -552,6 +552,7 @@ if st.session_state["page"] == "split":
                 status.text("Finalizing...")
                 runtime = time.time() - start_time
 
+
                 if policies:
                     st.success(f"✅ Split complete — {len(policies)} policy files created.")
                     st.write(f"⏱ Runtime: {runtime:.2f} seconds")
