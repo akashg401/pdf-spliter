@@ -323,12 +323,15 @@ def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tup
 def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
     """
     Extract invoice metadata from pages [start_idx, end_idx]:
-      - invoice_no
-      - total_members
-      - first_member_name
-      - full_text (for debugging)
+      - invoice_no: text like 12298282 or INV-10124343
+      - total_members: highest Sr. No. in line table (int)
+      - first_member_name: name for Sr. No. 1
+      - full_text: concatenated text for debugging
+    Works for both old and new formats as long as passenger rows look like:
+      1 ROHIT ...
+      2 SOMEONE ...
     """
-    texts = []
+    texts: List[str] = []
     for i in range(start_idx, end_idx + 1):
         try:
             t = pdf.pages[i].extract_text() or ""
@@ -338,39 +341,50 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
 
     full_text = "\n".join(texts)
 
-    # Invoice number
+    # ---------------- Invoice number ----------------
     invoice_no = None
-    m = re.search(r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)", full_text, flags=re.IGNORECASE)
-    if m:
-        invoice_no = m.group(1).strip()
+    for pattern in [
+        r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+        r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+    ]:
+        m = re.search(pattern, full_text, flags=re.IGNORECASE)
+        if m:
+            invoice_no = m.group(1).strip()
+            break
 
-    # Total members – last numeric Sr. No. before 'Total'
-    total_members = None
+    # ---------------- Total members (Sr. No. max) ----------------
+    # Limit search to before "Total" if present (to avoid footer noise)
     search_area = full_text
     idx_total = full_text.lower().find("total")
     if idx_total != -1:
         search_area = full_text[:idx_total]
 
-    matches = list(re.finditer(r"^\s*(\d+)\s+[A-Z]", search_area, flags=re.MULTILINE))
+    total_members: int | None = None
+    matches = list(
+        re.finditer(
+            r"^\s*(\d+)\s+[A-Za-z]",  # line starting with a number then a name
+            search_area,
+            flags=re.MULTILINE,
+        )
+    )
     if matches:
         try:
             total_members = int(matches[-1].group(1))
         except ValueError:
             total_members = None
 
-    # First member name (Sr. No. 1 row)
-    first_member = None
-    header_idx = full_text.lower().find("name of member")
-    segment = full_text[header_idx:] if header_idx != -1 else full_text
+    # ---------------- First member name (Sr. No. 1) ----------------
+    first_member: str | None = None
 
-    # Rough pattern: "1 NAME ... <numbers>"
-    m2 = re.search(
-        r"^\s*1\s+([A-Z][A-Za-z\s\.'-]+?)\s+\S+\s+\S+",
-        segment,
-        flags=re.MULTILINE | re.IGNORECASE,
-    )
-    if m2:
-        first_member = re.sub(r"\s+", " ", m2.group(1)).strip()
+    # Try “1  NAME  ...” with at least two spaces before next field
+    for pattern in [
+        r"^\s*1\s+([A-Z][A-Za-z\s\.'-]+?)\s{2,}\S+",
+        r"^\s*1\s+([A-Z][A-Za-z\s\.'-]+)",  # fallback: name till end of line
+    ]:
+        m2 = re.search(pattern, search_area, flags=re.MULTILINE | re.IGNORECASE)
+        if m2:
+            first_member = re.sub(r"\s+", " ", m2.group(1)).strip()
+            break
 
     return invoice_no, total_members, first_member, full_text
 
