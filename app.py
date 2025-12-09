@@ -514,7 +514,7 @@ if st.session_state["page"] == "split":
                         st.exception(e)
 
 
-                else:  # Fixed number of pages
+            else:  # Fixed number of pages
                     num_policies = (total_pages + pages_per_policy - 1) // pages_per_policy
                     try:
                         with pdfplumber.open(pdf_bytes_for_plumber) as pdf:
