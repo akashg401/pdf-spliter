@@ -48,6 +48,10 @@ st.write("")  # spacer
 if "page" not in st.session_state:
     st.session_state["page"] = "home"
 
+if "invoice_result" not in st.session_state:
+    st.session_state["invoice_result"] = None
+
+
 def go_home():
     st.session_state["page"] = "home"
 
@@ -420,29 +424,39 @@ if st.session_state["page"] == "split":
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
-            # -------------------------
-    # NEW: Invoice splitter
+         # -------------------------
+    # NEW: Invoice splitter (with session_state)
     # -------------------------
     if split_feature == "Invoices (Asego Global)":
         uploaded_file = st.file_uploader(
             "Upload merged invoices PDF",
-            type=["pdf"]
+            type=["pdf"],
+            key="invoice_file"
         )
 
         trigger_text = st.text_input(
             "Text that marks start of each invoice (client name / header)",
             value="",
             placeholder="e.g. ASEGO GLOBAL ASSISTANCE LIMITED",
-            help="Each time this text appears on a new page, a new invoice is assumed to start."
+            help="Each time this text appears on a new page, a new invoice is assumed to start.",
+            key="invoice_trigger"
         )
 
         debug_mode = st.checkbox(
             "Debug: show parsed invoice text for each invoice",
-            value=False
+            value=False,
+            key="invoice_debug"
         )
 
-        run_invoice = st.button("▶️ Run Invoice Splitter")
+        run_invoice = st.button("▶️ Run Invoice Splitter", key="run_invoice")
 
+        # Build a key that identifies the current input (file + trigger)
+        file_key = None
+        if uploaded_file is not None:
+            file_bytes = uploaded_file.getvalue()
+            file_key = (uploaded_file.name, len(file_bytes), trigger_text.strip())
+
+        # 1) Run split when button is clicked
         if run_invoice:
             if not uploaded_file:
                 st.error("Please upload a PDF file first.")
@@ -453,21 +467,22 @@ if st.session_state["page"] == "split":
 
                 reader = PdfReader(uploaded_file)
                 total_pages = len(reader.pages)
-                file_size = len(uploaded_file.getvalue())
+                file_size = len(file_bytes)
                 st.info(f"File info — Pages: {total_pages} • Size: {human_size(file_size)}")
                 st.write("")
 
-                raw_bytes = uploaded_file.getvalue()
-                start_pages_0 = find_invoice_start_pages(raw_bytes, trigger_text)
+                start_pages_0 = find_invoice_start_pages(file_bytes, trigger_text)
                 if not start_pages_0:
                     st.error("No invoice start pages found using the given trigger text.")
+                    st.session_state["invoice_result"] = None
                     st.stop()
 
                 ranges = compute_invoice_ranges(start_pages_0, total_pages)
 
-                pdf_bytes_for_plumber = safe_pdfplumber_open(uploaded_file)
-                invoices: List[Tuple[str, io.BytesIO]] = []
+                pdf_bytes_for_plumber = io.BytesIO(file_bytes)
+                invoices: List[Tuple[str, bytes]] = []
                 summary_rows: List[Dict[str, object]] = []
+                texts_per_invoice: List[str] = []
                 name_counter: Dict[str, int] = {}
 
                 progress = st.progress(0.0)
@@ -502,8 +517,10 @@ if st.session_state["page"] == "split":
 
                             buf = io.BytesIO()
                             writer.write(buf)
-                            buf.seek(0)
-                            invoices.append((unique_name, buf))
+                            data_bytes = buf.getvalue()
+
+                            invoices.append((unique_name, data_bytes))
+                            texts_per_invoice.append(invoice_text)
 
                             summary_rows.append({
                                 "#": idx,
@@ -512,66 +529,84 @@ if st.session_state["page"] == "split":
                                 "Members": total_members if total_members is not None else "",
                                 "Pages": (end - start + 1),
                             })
-
-                            # Debug: show parsed text for this invoice
-                            if debug_mode:
-                                with st.expander(f"Debug: Invoice {idx} – {unique_name}"):
-                                    st.text(invoice_text)
                 except Exception as e:
                     st.error("Error while processing invoice PDF.")
                     st.exception(e)
+                    st.session_state["invoice_result"] = None
                     st.stop()
 
                 progress.progress(1.0)
                 status.text("Finalizing...")
                 runtime = time.time() - start_time
 
-                if invoices:
-                    st.success(f"✅ Split complete — {len(invoices)} invoice files created.")
-                    st.write(f"⏱ Runtime: {runtime:.2f} seconds")
+                # Store in session_state so downloads survive reruns
+                st.session_state["invoice_result"] = {
+                    "file_key": file_key,
+                    "summary_rows": summary_rows,
+                    "invoices": invoices,  # list of (name, bytes)
+                    "texts": texts_per_invoice,
+                    "runtime": runtime,
+                }
 
-                    # Summary table
-                    df = pd.DataFrame(summary_rows)
-                    st.dataframe(df, use_container_width=True)
+        # 2) Show results if we have a stored result for this file/trigger
+        result = st.session_state.get("invoice_result")
+        if result and file_key is not None and result["file_key"] == file_key:
+            summary_rows = result["summary_rows"]
+            invoices = result["invoices"]
+            texts_per_invoice = result["texts"]
+            runtime = result["runtime"]
 
-                    # CSV download
-                    csv_bytes = df.to_csv(index=False).encode("utf-8")
+            st.success(f"✅ Split complete — {len(invoices)} invoice files created.")
+            st.write(f"⏱ Runtime: {runtime:.2f} seconds")
+
+            # Summary table
+            df = pd.DataFrame(summary_rows)
+            st.dataframe(df, use_container_width=True)
+
+            # CSV download
+            csv_bytes = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Download CSV summary",
+                data=csv_bytes,
+                file_name="invoice_summary.csv",
+                mime="text/csv",
+                key="dl_invoice_csv"
+            )
+
+            # Debug view
+            if debug_mode:
+                for (name, _bytes), row, text in zip(invoices, summary_rows, texts_per_invoice):
+                    with st.expander(f"Debug: Invoice {row['#']} – {name}"):
+                        st.text(text)
+
+            # Per-invoice download
+            with st.expander("Download individual invoices"):
+                for (name, data_bytes), row in zip(invoices, summary_rows):
                     st.download_button(
-                        "⬇️ Download CSV summary",
-                        data=csv_bytes,
-                        file_name="invoice_summary.csv",
-                        mime="text/csv"
+                        label=f"Download #{row['#']}: {name}",
+                        data=data_bytes,
+                        file_name=f"{name}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_invoice_{row['#']}"
                     )
 
-                    # Per-invoice download (Point 2)
-                    with st.expander("Download individual invoices"):
-                        for (name, buf), row in zip(invoices, summary_rows):
-                            st.download_button(
-                                label=f"Download #{row['#']}: {name}",
-                                data=buf.getvalue(),
-                                file_name=f"{name}.pdf",
-                                mime="application/pdf",
-                                key=f"dl_invoice_{row['#']}"
-                            )
-
-                    # ZIP of invoices
-                    zip_buffer = io.BytesIO()
-                    with zipfile.ZipFile(zip_buffer, "w") as zf:
-                        for name, buf in invoices:
-                            zf.writestr(f"{name}.pdf", buf.getvalue())
-                    zip_buffer.seek(0)
-                    zip_filename = f"invoices_x_{len(invoices)}.zip"
-                    st.download_button(
-                        "⬇️ Download ZIP of invoices",
-                        data=zip_buffer,
-                        file_name=zip_filename,
-                        mime="application/zip"
-                    )
-                else:
-                    st.error("No invoices were produced. Check file and trigger text.")
+            # ZIP of invoices
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w") as zf:
+                for name, data_bytes in invoices:
+                    zf.writestr(f"{name}.pdf", data_bytes)
+            zip_buffer.seek(0)
+            st.download_button(
+                "⬇️ Download ZIP of invoices",
+                data=zip_buffer,
+                file_name=f"invoices_x_{len(invoices)}.zip",
+                mime="application/zip",
+                key="dl_invoice_zip"
+            )
 
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
+
 
 # -------------------------
 # Merge page
