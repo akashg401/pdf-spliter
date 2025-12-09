@@ -131,14 +131,18 @@ def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tup
         ranges.append((start, end))
     return ranges
 
-def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str]:
+def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
     """
     From pages [start_idx, end_idx] (0-based, inclusive) of a pdfplumber PDF,
     extract:
       - invoice_no (str or None)
       - total_members (int or None)
       - first_member_name (str or None)
-    Assumes format similar to Asego / Adiona sample invoices.
+      - full_text (str)  # for debug / analysis
+
+    Designed to handle both:
+      - older multi-column tables ("Name of Member")
+      - newer Asego format ("Name of Traveller") :contentReference[oaicite:1]{index=1}
     """
     texts = []
     for i in range(start_idx, end_idx + 1):
@@ -149,41 +153,70 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
         texts.append(t)
     full_text = "\n".join(texts)
 
-    # Invoice number: e.g. "Invoice no. : 12267870"
+    # -------------------------
+    # 1) Invoice number
+    # -------------------------
     invoice_no = None
-    m = re.search(r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)", full_text, flags=re.IGNORECASE)
+    m = re.search(
+        r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+        full_text,
+        flags=re.IGNORECASE
+    )
+    if not m:
+        # fallback to 'Invoice no.' variant
+        m = re.search(
+            r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+            full_text,
+            flags=re.IGNORECASE
+        )
     if m:
         invoice_no = m.group(1).strip()
 
-    # Total members: approximate - last Sr. No. line before "Total Amount"
-    total_members = None
-    idx_total = full_text.lower().find("total amount")
-    search_area = full_text[:idx_total] if idx_total != -1 else full_text
-    matches = list(re.finditer(r"(\d+)\s+[A-Z]", search_area))
-    if matches:
-        try:
-            total_members = int(matches[-1].group(1))
-        except ValueError:
-            total_members = None
+    # -------------------------
+    # 2) Locate table segment
+    # -------------------------
+    header_idx = -1
+    for header in ["name of member", "name of traveller"]:
+        header_idx = full_text.lower().find(header)
+        if header_idx != -1:
+            break
 
-        # First member name (Sr. No. 1 row)
-    first_member = None
-    header_idx = full_text.lower().find("name of member")
     segment = full_text[header_idx:] if header_idx != -1 else full_text
 
-    # Example row in your PDF:
-    # "1 PALANISAMY AYYADURAI 0 110070081838 70081838 118.64 21.36 140.00"
-    # The key fix: make the name group GREEDY (no "?"), so it captures the full name.
-    m2 = re.search(
-        r"\b1\s+([A-Z][A-Za-z\s\.'-]+)\s+\S+\s+\S+\s+[0-9.,]+\s+[0-9.,]+\s+[0-9.,]+",
-        segment,
-        flags=re.MULTILINE | re.IGNORECASE
-    )
-    if m2:
-        first_member = re.sub(r"\s+", " ", m2.group(1)).strip()
+    lines = [ln for ln in segment.splitlines() if ln.strip()]
 
+    # -------------------------
+    # 3) Detect member rows & total_members
+    #    Row pattern: starts with 1 / 01 / 1. / 01. etc
+    # -------------------------
+    row_pattern = re.compile(r"^\s*\d+\s*[.)]?\s+")
+    member_lines = [ln for ln in lines if row_pattern.match(ln)]
 
-    return invoice_no, total_members, first_member
+    total_members = len(member_lines) if member_lines else None
+
+    # -------------------------
+    # 4) First member name
+    #    We parse the first member row line.
+    # -------------------------
+    first_member = None
+    if member_lines:
+        row_line = member_lines[0]
+        # Remove Sr. No. prefix
+        row_line = row_pattern.sub("", row_line).strip()
+
+        tokens = row_line.split()
+        name_tokens = []
+        for tok in tokens:
+            # Stop name at first token containing a digit (IC82221, 110070081838, etc.)
+            if re.search(r"\d", tok):
+                break
+            name_tokens.append(tok)
+
+        if name_tokens:
+            first_member = re.sub(r"\s+", " ", " ".join(name_tokens)).strip()
+
+    return invoice_no, total_members, first_member, full_text
+
 
 # -------------------------
 # Home page
@@ -377,7 +410,7 @@ if st.session_state["page"] == "split":
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
-        # -------------------------
+            # -------------------------
     # NEW: Invoice splitter
     # -------------------------
     if split_feature == "Invoices (Asego Global)":
@@ -389,8 +422,13 @@ if st.session_state["page"] == "split":
         trigger_text = st.text_input(
             "Text that marks start of each invoice (client name / header)",
             value="",
-            placeholder="e.g. ASEGO GLOBAL INSURANCE",
+            placeholder="e.g. ASEGO GLOBAL ASSISTANCE LIMITED",
             help="Each time this text appears on a new page, a new invoice is assumed to start."
+        )
+
+        debug_mode = st.checkbox(
+            "Debug: show parsed invoice text for each invoice",
+            value=False
         )
 
         run_invoice = st.button("▶️ Run Invoice Splitter")
@@ -436,7 +474,7 @@ if st.session_state["page"] == "split":
                                 progress.progress(pages_processed / total_pages)
                                 status.text(f"Processing pages: {pages_processed} / {total_pages}")
 
-                            invoice_no, total_members, first_member = extract_invoice_metadata(
+                            invoice_no, total_members, first_member, invoice_text = extract_invoice_metadata(
                                 pdf, start, end
                             )
 
@@ -464,6 +502,11 @@ if st.session_state["page"] == "split":
                                 "Members": total_members if total_members is not None else "",
                                 "Pages": (end - start + 1),
                             })
+
+                            # Debug: show parsed text for this invoice
+                            if debug_mode:
+                                with st.expander(f"Debug: Invoice {idx} – {unique_name}"):
+                                    st.text(invoice_text)
                 except Exception as e:
                     st.error("Error while processing invoice PDF.")
                     st.exception(e)
@@ -477,9 +520,11 @@ if st.session_state["page"] == "split":
                     st.success(f"✅ Split complete — {len(invoices)} invoice files created.")
                     st.write(f"⏱ Runtime: {runtime:.2f} seconds")
 
+                    # Summary table
                     df = pd.DataFrame(summary_rows)
                     st.dataframe(df, use_container_width=True)
 
+                    # CSV download
                     csv_bytes = df.to_csv(index=False).encode("utf-8")
                     st.download_button(
                         "⬇️ Download CSV summary",
@@ -488,16 +533,28 @@ if st.session_state["page"] == "split":
                         mime="text/csv"
                     )
 
+                    # Per-invoice download (Point 2)
+                    with st.expander("Download individual invoices"):
+                        for (name, buf), row in zip(invoices, summary_rows):
+                            st.download_button(
+                                label=f"Download #{row['#']}: {name}",
+                                data=buf.getvalue(),
+                                file_name=f"{name}.pdf",
+                                mime="application/pdf",
+                                key=f"dl_invoice_{row['#']}"
+                            )
+
+                    # ZIP of invoices
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w") as zf:
                         for name, buf in invoices:
                             zf.writestr(f"{name}.pdf", buf.getvalue())
                     zip_buffer.seek(0)
-
+                    zip_filename = f"invoices_x_{len(invoices)}.zip"
                     st.download_button(
                         "⬇️ Download ZIP of invoices",
                         data=zip_buffer,
-                        file_name=f"invoices_x_{len(invoices)}.zip",
+                        file_name=zip_filename,
                         mime="application/zip"
                     )
                 else:
