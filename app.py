@@ -142,8 +142,9 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
 
     Designed to handle both:
       - older multi-column tables ("Name of Member")
-      - newer Asego format ("Name of Traveller") :contentReference[oaicite:1]{index=1}
+      - newer Asego format ("Name of Traveller")
     """
+    # Collect text from all pages in this invoice
     texts = []
     for i in range(start_idx, end_idx + 1):
         try:
@@ -173,41 +174,49 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
         invoice_no = m.group(1).strip()
 
     # -------------------------
-    # 2) Locate table segment
+    # 2) Build clean line list
     # -------------------------
-    header_idx = -1
-    for header in ["name of member", "name of traveller"]:
-        header_idx = full_text.lower().find(header)
-        if header_idx != -1:
+    lines_all = [ln.strip() for ln in full_text.splitlines() if ln.strip()]
+
+    # -------------------------
+    # 3) Find the header line ("Name of Traveller" / "Name of Member")
+    # -------------------------
+    header_idx = None
+    for idx, ln in enumerate(lines_all):
+        l = ln.lower()
+        if "name of traveller" in l or "name of member" in l:
+            header_idx = idx
             break
 
-    segment = full_text[header_idx:] if header_idx != -1 else full_text
-
-    lines = [ln for ln in segment.splitlines() if ln.strip()]
+    member_lines = []
+    if header_idx is not None:
+        # Look at lines after header until we hit "Total Amount" or similar
+        for ln in lines_all[header_idx + 1 :]:
+            low = ln.lower()
+            if low.startswith("total amount"):
+                break
+            # Row pattern: "01. NAME ..." or "1 NAME ..."
+            if re.match(r"^\d+\s*[.)]?\s+", ln):
+                member_lines.append(ln)
 
     # -------------------------
-    # 3) Detect member rows & total_members
-    #    Row pattern: starts with 1 / 01 / 1. / 01. etc
+    # 4) Total members = number of data rows
     # -------------------------
-    row_pattern = re.compile(r"^\s*\d+\s*[.)]?\s+")
-    member_lines = [ln for ln in lines if row_pattern.match(ln)]
-
     total_members = len(member_lines) if member_lines else None
 
     # -------------------------
-    # 4) First member name
-    #    We parse the first member row line.
+    # 5) First member name
     # -------------------------
     first_member = None
     if member_lines:
         row_line = member_lines[0]
-        # Remove Sr. No. prefix
-        row_line = row_pattern.sub("", row_line).strip()
+        # Remove Sr. No. prefix like "01." or "1."
+        row_line = re.sub(r"^\s*\d+\s*[.)]?\s+", "", row_line).strip()
 
         tokens = row_line.split()
         name_tokens = []
         for tok in tokens:
-            # Stop name at first token containing a digit (IC82221, 110070081838, etc.)
+            # stop at first token containing a digit (IC83152, 110070081838, etc.)
             if re.search(r"\d", tok):
                 break
             name_tokens.append(tok)
@@ -216,6 +225,7 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
             first_member = re.sub(r"\s+", " ", " ".join(name_tokens)).strip()
 
     return invoice_no, total_members, first_member, full_text
+
 
 
 # -------------------------
