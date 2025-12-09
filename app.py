@@ -553,7 +553,7 @@ if st.session_state["page"] == "split":
             runtime = time.time() - start_time
 
 
-                if policies:
+            if policies:
                     st.success(f"✅ Split complete — {len(policies)} policy files created.")
                     st.write(f"⏱ Runtime: {runtime:.2f} seconds")
 
@@ -586,7 +586,7 @@ if st.session_state["page"] == "split":
                         file_name=zip_filename,
                         mime="application/zip"
                     )
-                else:
+            else:
                     st.error("No policies were produced. Check file and split settings.")
 
         st.markdown("<hr>", unsafe_allow_html=True)
