@@ -111,16 +111,16 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         "Passport Number": "",
     }
 
-  def clean_name(raw: str) -> str:
-    """
-    Take the raw text after 'Insured Name:' or 'Traveller' and
-    keep only plausible name tokens (letters only, no label words).
-    """
-    if not raw:
-        return ""
-
-    tokens = re.split(r"\s+", raw.strip())
-    cleaned_tokens = []
+      def clean_name(raw: str) -> str:
+        """
+        Take the raw text after 'Insured Name:' or 'Traveller' and
+        keep only plausible name tokens (letters only, no label words).
+        """
+        if not raw:
+            return ""
+    
+        tokens = re.split(r"\s+", raw.strip())
+        cleaned_tokens = []
 
     for tok in tokens:
         # Strip obvious punctuation from ends
