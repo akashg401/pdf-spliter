@@ -115,8 +115,9 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     }
 
     # -------------------------
-    # Assist No (Travel Protection Card or Certificate No)
+    # Assist No (Travel Protection Card / Certificate)
     # -------------------------
+    assist = ""
     m = re.search(
         r"Assist\s*No\.?\s*[:.]?\s*([A-Z0-9]+)",
         full_text,
@@ -130,8 +131,14 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
             flags=re.IGNORECASE,
         )
     if m:
-        meta["Assist No"] = m.group(1).strip()
+        candidate = m.group(1).strip()
+        # Hard filter: must contain at least one digit and be at least 5 chars
+        if re.search(r"\d", candidate) and len(candidate) >= 5:
+            assist = candidate
 
+    meta["Assist No"] = assist
+
+    
     # -------------------------
     # Name (Insured Name:, with hard stop before next field)
     # -------------------------
@@ -426,6 +433,12 @@ if st.session_state["page"] == "split":
         if split_mode == "Fixed number of pages":
             pages_per_policy = st.number_input("Enter pages per policy:", min_value=1, value=4)
 
+        debug_policies = st.checkbox(
+            "Debug policies: show parsed text and metadata",
+            value=False
+        )
+
+
         run = st.button("▶️ Run Splitter")
 
         if run:
@@ -444,6 +457,8 @@ if st.session_state["page"] == "split":
                 policies: List[Tuple[str, io.BytesIO]] = []
                 name_counter: Dict[str, int] = {}
                 policy_summary_rows: List[Dict[str, object]] = []
+                policy_texts: List[str] = []
+                policy_meta_list: List[Dict[str, str]] = []
 
                 progress = st.progress(0.0)
                 status = st.empty()
@@ -471,23 +486,23 @@ if st.session_state["page"] == "split":
                                 if is_new_card:
                                     # finalize previous policy
                                     if current_writer is not None and current_text_parts:
-                                        full_text = "\n".join(current_text_parts)
+                                       full_text = "\n".join(current_text_parts)
                                         meta = extract_policy_metadata_from_text(full_text)
-
+                                        
                                         base_name = build_policy_filename(
                                             meta.get("Name", ""),
                                             meta.get("Assist No", "")
                                         )
                                         if not base_name:
                                             base_name = f"Policy_{len(policies) + 1}"
-
+                                        
                                         unique_name = get_unique_name(base_name, name_counter)
-
+                                        
                                         buf = io.BytesIO()
                                         current_writer.write(buf)
                                         buf.seek(0)
                                         policies.append((unique_name, buf))
-
+                                        
                                         policy_summary_rows.append({
                                             "#": len(policy_summary_rows) + 1,
                                             "Filename": f"{unique_name}.pdf",
@@ -498,6 +513,11 @@ if st.session_state["page"] == "split":
                                             "Date of Birth": meta.get("Date of Birth", ""),
                                             "Passport Number": meta.get("Passport Number", ""),
                                         })
+                                        
+                                        # NEW: debug storage
+                                        policy_texts.append(full_text)
+                                        policy_meta_list.append(meta)
+
 
                                     # start new policy
                                     current_writer = PdfWriter()
@@ -602,6 +622,10 @@ if st.session_state["page"] == "split":
                         st.error("Error while processing PDF.")
                         st.exception(e)
 
+                policy_texts.append(full_text)
+                policy_meta_list.append(meta)
+
+
                 progress.progress(1.0)
                 status.text("Finalizing...")
                 runtime = time.time() - start_time
@@ -620,6 +644,15 @@ if st.session_state["page"] == "split":
                         )
 
                     st.dataframe(df, use_container_width=True)
+
+                    # Debug output
+                    if debug_policies and policy_texts:
+                        st.markdown("#### Debug: raw text and parsed metadata")
+                        for row, text, meta in zip(policy_summary_rows, policy_texts, policy_meta_list):
+                            with st.expander(f"Policy {row['#']} – {row['Filename']}"):
+                                st.write("Parsed metadata:", meta)
+                                st.text(text[:4000])
+
 
                     # ZIP only
                     zip_buffer = io.BytesIO()
