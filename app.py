@@ -94,7 +94,7 @@ def safe_pdfplumber_open(uploaded_file) -> io.BytesIO:
 
 def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     """
-    Extract policy-level metadata from the text of one policy:
+    Extract policy-level metadata from one policy's text:
       - Name
       - Assist No
       - Start Date
@@ -102,7 +102,8 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
       - Date of Birth
       - Passport Number
 
-    Works for old TRAVEL PROTECTION CARD format and newer Asego policy PDFs.
+    Designed specifically for the ICICI Lombard + Zurich Kotak formats
+    in your sample PDF. :contentReference[oaicite:1]{index=1}
     """
     meta = {
         "Name": "",
@@ -113,86 +114,100 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         "Passport Number": "",
     }
 
-    def first_match(pattern: str, flags=re.IGNORECASE):
-        m = re.search(pattern, full_text, flags)
-        return m.group(1).strip() if m else ""
-
-    # Assist No  (e.g. IC83151EN1, 10009995)
-    assist = first_match(r"Assist\s*No\.?\s*[:.]?\s*([A-Za-z0-9]+)")
-    meta["Assist No"] = assist
-
-    # Name
-    name = first_match(r"Insured\s+Name\s*:\s*([A-Z][A-Za-z\s\.'-]+)")
-
-    if not name:
-        # "Traveller" on one line, name on next
+    # -------------------------
+    # Assist No (Travel Protection Card or Certificate No)
+    # -------------------------
+    m = re.search(
+        r"Assist\s*No\.?\s*[:.]?\s*([A-Z0-9]+)",
+        full_text,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        # Fallback: certificate number line
         m = re.search(
-            r"Traveller\s*\n\s*([A-Z][A-Za-z\s\.'-]+)",
+            r"Certificate\s+No\s*[:.]?\s*([A-Z0-9]+)",
             full_text,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
-        if m:
-            name = m.group(1)
+    if m:
+        meta["Assist No"] = m.group(1).strip()
 
-    if not name:
-        # Generic "Name: XYZ" but avoid "Name of ..."
+    # -------------------------
+    # Name (Insured Name:, with hard stop before next field)
+    # -------------------------
+    m = re.search(
+        r"Insured\s+Name\s*:\s*([A-Z][A-Z\s\.'-]+?)(?=\s+Date\s+of\s+Birth|\s+Passport\s+Number|$)",
+        full_text,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        # Fallback: Traveller header on Travel Protection Card
         m = re.search(
-            r"\bName\s*:\s*([A-Z][A-Za-z\s\.'-]+)",
+            r"Traveller\s*\n\s*([A-Z][A-Z\s\.'-]+)",
             full_text,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
-        if m and "name of" not in m.group(0).lower():
-            name = m.group(1)
 
-    if name:
-        # Normalize spaces
+    if m:
+        name = m.group(1)
         name = re.sub(r"\s+", " ", name).strip()
-        # HARD CUT: drop anything starting with "Date ..." or "Dat ..."
-        for pat in [r"\s+Date\b", r"\s+Dat\b"]:
-            parts = re.split(pat, name)
-            if parts:
-                name = parts[0].strip()
-        name = re.sub(r"\s+", " ", name).strip()
+        meta["Name"] = name
 
-    meta["Name"] = name
-
+    # -------------------------
     # Start / End Date
+    # -------------------------
     start_date = ""
     end_date = ""
 
-    # 1) Commencement Date: From: dd/mm/yyyy End Date: dd/mm/yyyy
+    # 1) ICICI certificate: "Commencement Date: From: dd/mm/yyyy End Date: dd/mm/yyyy"
     m = re.search(
         r"Commencement\s+Date\s*:\s*From\s*:\s*([0-9/]+)\s*End\s*Date\s*:\s*([0-9/]+)",
         full_text,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
     if not m:
-        # 2) Start Date\n<date> ... End Date\n<date>
+        # 2) Travel Protection Card layout
         m = re.search(
             r"Start\s*Date\s*\n\s*([0-9/]+).*?End\s*Date\s*\n\s*([0-9/]+)",
             full_text,
-            flags=re.IGNORECASE | re.DOTALL
+            flags=re.IGNORECASE | re.DOTALL,
         )
     if not m:
         # 3) "Date of your travel : dd/mm/yyyy to dd/mm/yyyy"
         m = re.search(
             r"Date\s+of\s+your\s+travel\s*[:\-]?\s*([0-9/]+)\s*(?:to|-)\s*([0-9/]+)",
             full_text,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
+
     if m:
-        start_date, end_date = m.group(1).strip(), m.group(2).strip()
+        start_date = m.group(1).strip()
+        end_date = m.group(2).strip()
 
     meta["Start Date"] = start_date
     meta["End Date"] = end_date
 
+    # -------------------------
     # Date of Birth
-    dob = first_match(r"Date\s+of\s+Birth\s*[:\-]?\s*([0-9/]+)")
-    meta["Date of Birth"] = dob
+    # -------------------------
+    m = re.search(
+        r"Date\s+of\s+Birth\s*[:\-]?\s*([0-9/]+)",
+        full_text,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        meta["Date of Birth"] = m.group(1).strip()
 
+    # -------------------------
     # Passport Number
-    passport = first_match(r"Passport\s+Number\s*[:\-]?\s*([A-Z0-9]+)")
-    meta["Passport Number"] = passport
+    # -------------------------
+    m = re.search(
+        r"Passport\s+Number\s*[:\-]?\s*([A-Z0-9]+)",
+        full_text,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        meta["Passport Number"] = m.group(1).strip()
 
     return meta
 
