@@ -111,20 +111,49 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         "Passport Number": "",
     }
 
-    def clean_name(raw: str) -> str:
-        if not raw:
-            return ""
-        name = re.sub(r"\s+", " ", raw).strip()
-        # Cut off any field labels trailing the name
-        cut_markers = [" date of", " dob", " passport", " age"]
-        lower = name.lower()
-        for marker in cut_markers:
-            idx = lower.find(marker)
-            if idx != -1:
-                name = name[:idx]
-                break
-        name = re.sub(r"\s+", " ", name).strip()
-        return name
+  def clean_name(raw: str) -> str:
+    """
+    Take the raw text after 'Insured Name:' or 'Traveller' and
+    keep only plausible name tokens (letters only, no label words).
+    """
+    if not raw:
+        return ""
+
+    tokens = re.split(r"\s+", raw.strip())
+    cleaned_tokens = []
+
+    for tok in tokens:
+        # Strip obvious punctuation from ends
+        core = tok.strip(",:/()")
+        if not core:
+            continue
+
+        up = core.upper()
+
+        # Hard stop: if we hit obvious label tokens, stop parsing the name
+        if up in {"DATE", "DAT", "BIRTH", "DOB"}:
+            break
+
+        # Drop anything with digits (e.g. '2Date', 'Dat1e')
+        if re.search(r"\d", core):
+            continue
+
+        # Drop pure label filler like 'OF' (from 'Date of Birth')
+        if up in {"OF"}:
+            continue
+
+        # Only keep tokens that are basically alphabetic name pieces
+        if not re.match(r"^[A-Z][A-Z'-]*$", up):
+            continue
+
+        cleaned_tokens.append(core)
+
+    if not cleaned_tokens:
+        # Fallback to trimmed raw if our filtering fails completely
+        return raw.strip()
+
+    return " ".join(cleaned_tokens)
+
 
     def first_match(pattern: str, flags=re.IGNORECASE):
         m = re.search(pattern, full_text, flags)
@@ -239,8 +268,17 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         start_date = m.group(1).strip()
         end_date = m.group(2).strip()
 
-    meta["Start Date"] = start_date
-    meta["End Date"] = end_date
+       def normalize_date(s: str) -> str:
+        if not s:
+            return ""
+        # Accept simple dd/mm/yy or dd/mm/yyyy; anything else is dropped
+        if not re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", s):
+            return ""
+        return s
+
+    meta["Start Date"] = normalize_date(start_date)
+    meta["End Date"] = normalize_date(end_date)
+
 
     # -------------------------
     # Date of Birth
