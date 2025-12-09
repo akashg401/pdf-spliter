@@ -417,7 +417,7 @@ if st.session_state["page"] == "split":
                 status = st.empty()
                 pages_processed = 0
 
-                                if split_mode == "Detect by TRAVEL PROTECTION CARD":
+            if split_mode == "Detect by TRAVEL PROTECTION CARD":
                     current_writer = None
                     current_text_parts: List[str] = []
 
