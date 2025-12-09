@@ -14,13 +14,12 @@ from typing import Tuple, Dict, List
 # -------------------------
 st.set_page_config(page_title="📄 PDF Tools", layout="centered", initial_sidebar_state="auto")
 
-# CSS tweaks
 st.markdown(
     """
     <style>
-   .stApp {
-    background-color: #f7f7f8;
-}
+    .stApp {
+        background-color: #f7f7f8;
+    }
     .big-card {
         border: 1px solid #e6e6e6;
         border-radius: 12px;
@@ -40,17 +39,16 @@ st.markdown(
 
 # Tooltip in title
 st.markdown('<h1 title="Made by AG with ❤️">📄 PDF Tools</h1>', unsafe_allow_html=True)
-st.write("")  # spacer
+st.write("")
 
 # -------------------------
-# Navigation
+# Navigation + session
 # -------------------------
 if "page" not in st.session_state:
     st.session_state["page"] = "home"
 
 if "invoice_result" not in st.session_state:
     st.session_state["invoice_result"] = None
-
 
 def go_home():
     st.session_state["page"] = "home"
@@ -62,7 +60,7 @@ def go_merge():
     st.session_state["page"] = "merge"
 
 # -------------------------
-# Helper functions (existing)
+# Helper functions (generic)
 # -------------------------
 def human_size(nbytes: int) -> str:
     if nbytes == 0:
@@ -73,34 +71,74 @@ def human_size(nbytes: int) -> str:
     s = round(nbytes / p, 2)
     return f"{s} {sizes[i]}"
 
-def clean_name(line: str) -> str:
-    name = re.sub(r"NAME\s*[:\-]?\s*", "", line, flags=re.IGNORECASE)
-    name = re.sub(r"\d+", "", name)
-    name = re.sub(r"ASSIST.*", "", name, flags=re.IGNORECASE)
-    name = name.strip().replace(" ", "_")
-    name = re.sub(r'[\\/:"*?<>|]+', "", name)
-    return name if name else "Policy"
-
 def get_unique_name(name: str, existing_names: Dict[str, int]) -> str:
     if name not in existing_names:
         existing_names[name] = 0
         return name
-    else:
-        existing_names[name] += 1
-        return f"{name}_{existing_names[name]}"
+    existing_names[name] += 1
+    return f"{name}_{existing_names[name]}"
 
 def safe_pdfplumber_open(uploaded_file) -> io.BytesIO:
     return io.BytesIO(uploaded_file.getvalue())
+
+# -------------------------
+# Policy metadata helpers
+# -------------------------
+def clean_policy_name_segment(raw: str) -> str:
+    """
+    Clean the raw text after 'Insured Name:' or similar into a proper name.
+    - Drop tokens with digits (e.g. '2Date', 'Dat1e')
+    - Stop at label tokens like DATE / BIRTH / DOB
+    - Keep only A–Z tokens that look like names
+    """
+    if not raw:
+        return ""
+
+    tokens = re.split(r"\s+", raw.strip())
+    cleaned_tokens: List[str] = []
+
+    for tok in tokens:
+        core = tok.strip(",:/()")
+        if not core:
+            continue
+
+        up = core.upper()
+
+        # Stop when we hit label-ish tokens
+        if up in {"DATE", "DAT", "BIRTH", "DOB"}:
+            break
+
+        # Drop OCR garbage containing digits
+        if re.search(r"\d", core):
+            continue
+
+        # Drop useless filler (from "Date of Birth")
+        if up in {"OF"}:
+            continue
+
+        # Only keep alphabetic name-looking tokens
+        if not re.match(r"^[A-Z][A-Z'-]*$", up):
+            continue
+
+        cleaned_tokens.append(core)
+
+    if not cleaned_tokens:
+        # Fallback – return trimmed raw if everything was filtered out
+        return raw.strip()
+
+    return " ".join(cleaned_tokens)
+
 
 def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     """
     Extract policy-level metadata from one policy's text:
       - Name
-      - Assist No (Travel Assist / Certificate No / Card code)
+      - Assist No (travel/assist/certificate/card code)
       - Start Date
       - End Date
       - Date of Birth
       - Passport Number
+    Handles both old 'TRAVEL PROTECTION CARD' PDFs and newer ICICI/Asego policies.
     """
     meta = {
         "Name": "",
@@ -111,62 +149,16 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         "Passport Number": "",
     }
 
-    def clean_name(raw: str) -> str:
-        """
-        Take the raw text after 'Insured Name:' or 'Traveller' and
-        keep only plausible name tokens (letters only, no label words).
-        """
-        if not raw:
-            return ""
-    
-        tokens = re.split(r"\s+", raw.strip())
-        cleaned_tokens = []
-
-    for tok in tokens:
-        # Strip obvious punctuation from ends
-        core = tok.strip(",:/()")
-        if not core:
-            continue
-
-        up = core.upper()
-
-        # Hard stop: if we hit obvious label tokens, stop parsing the name
-        if up in {"DATE", "DAT", "BIRTH", "DOB"}:
-            break
-
-        # Drop anything with digits (e.g. '2Date', 'Dat1e')
-        if re.search(r"\d", core):
-            continue
-
-        # Drop pure label filler like 'OF' (from 'Date of Birth')
-        if up in {"OF"}:
-            continue
-
-        # Only keep tokens that are basically alphabetic name pieces
-        if not re.match(r"^[A-Z][A-Z'-]*$", up):
-            continue
-
-        cleaned_tokens.append(core)
-
-    if not cleaned_tokens:
-        # Fallback to trimmed raw if our filtering fails completely
-        return raw.strip()
-
-    return " ".join(cleaned_tokens)
-
-
-    def first_match(pattern: str, flags=re.IGNORECASE):
+    def first_match(pattern: str, flags=re.IGNORECASE) -> str:
         m = re.search(pattern, full_text, flags)
         return m.group(1).strip() if m else ""
 
-    # -------------------------
-    # Assist No (Travel card / certificate / code)
-    # -------------------------
+    # ----- Assist No / Certificate / Card code -----
     assist = ""
 
-    # 1) Explicit "Assist No."
+    # 1) Certificate No (prefer this; clean in certificate section)
     m = re.search(
-        r"Assist\s*No\.?\s*[:.]?\s*([A-Z0-9]+)",
+        r"Certificate\s+No\s*[:.]?\s*([A-Z0-9]+)",
         full_text,
         flags=re.IGNORECASE,
     )
@@ -175,10 +167,10 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         if re.search(r"\d", candidate) and len(candidate) >= 5:
             assist = candidate
 
-    # 2) Certificate No
+    # 2) Assist No
     if not assist:
         m = re.search(
-            r"Certificate\s+No\s*[:.]?\s*([A-Z0-9]+)",
+            r"Assist\s*No\.?\s*[:.]?\s*([A-Z0-9]+)",
             full_text,
             flags=re.IGNORECASE,
         )
@@ -187,7 +179,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
             if re.search(r"\d", candidate) and len(candidate) >= 5:
                 assist = candidate
 
-    # 3) Travel Protection Card line: code directly under the heading
+    # 3) Travel Protection Card line: ICxxxx right under the heading
     if not assist:
         m = re.search(
             r"Travel\s+Protection\s+Card\s*[\r\n]+([A-Z0-9]{5,})",
@@ -201,21 +193,19 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
 
     meta["Assist No"] = assist
 
-    # -------------------------
-    # Name
-    # -------------------------
+    # ----- Name -----
     name = ""
 
-    # Primary: one-line "Insured Name: <name> Date of Birth ..."
+    # Primary: "Insured Name: <line>"
     m = re.search(
         r"Insured\s+Name\s*:\s*([^\r\n]+)",
         full_text,
         flags=re.IGNORECASE,
     )
     if m:
-        name = clean_name(m.group(1))
+        name = clean_policy_name_segment(m.group(1))
 
-    # Fallback: "Traveller" header + next-line name (on card)
+    # Fallback: "Traveller" + next line on card
     if not name:
         m = re.search(
             r"Traveller\s*[\r\n]+([A-Za-z][A-Za-z\s\.'-]+)",
@@ -223,7 +213,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
             flags=re.IGNORECASE,
         )
         if m:
-            name = clean_name(m.group(1))
+            name = clean_policy_name_segment(m.group(1))
 
     # Very generic fallback: "Name: ..." but not "Name of ..."
     if not name:
@@ -233,13 +223,11 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
             flags=re.IGNORECASE,
         )
         if m and "name of" not in m.group(0).lower():
-            name = clean_name(m.group(1))
+            name = clean_policy_name_segment(m.group(1))
 
     meta["Name"] = name
 
-    # -------------------------
-    # Start / End Date
-    # -------------------------
+    # ----- Start / End Date -----
     start_date = ""
     end_date = ""
 
@@ -250,7 +238,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         flags=re.IGNORECASE,
     )
     if not m:
-        # 2) On card: Start Date\n<date> ... End Date\n<date>
+        # 2) Card layout: Start Date\n<date> ... End Date\n<date>
         m = re.search(
             r"Start\s*Date\s*\n\s*([0-9/]+).*?End\s*Date\s*\n\s*([0-9/]+)",
             full_text,
@@ -268,28 +256,15 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         start_date = m.group(1).strip()
         end_date = m.group(2).strip()
 
-    def normalize_date(s: str) -> str:
-        if not s:
-            return ""
-        # Accept simple dd/mm/yy or dd/mm/yyyy; anything else is dropped
-        if not re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", s):
-            return ""
-        return s
+    meta["Start Date"] = start_date
+    meta["End Date"] = end_date
 
-    meta["Start Date"] = normalize_date(start_date)
-    meta["End Date"] = normalize_date(end_date)
-
-
-    # -------------------------
-    # Date of Birth
-    # -------------------------
+    # ----- Date of Birth -----
     meta["Date of Birth"] = first_match(
-        r"Date\s+of\s+Birth\s*[:\-]?\s*([0-9/]+)"
+        r"Date\s+of\s+Birth.*?:\s*([0-9/]+)"
     )
 
-    # -------------------------
-    # Passport Number
-    # -------------------------
+    # ----- Passport Number -----
     meta["Passport Number"] = first_match(
         r"Passport\s+Number\s*[:\-]?\s*([A-Z0-9]+)"
     )
@@ -308,30 +283,22 @@ def build_policy_filename(name: str, assist_no: str) -> str:
     elif assist_no:
         raw = assist_no
     else:
-        return ""
+        return "Policy"
 
     raw = re.sub(r'[\\/:"*?<>|]+', "", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
     return raw.replace(" ", "_")
 
 # -------------------------
-# NEW Helper functions for invoice splitting
+# Invoice helpers
 # -------------------------
 def sanitize_invoice_name(name: str) -> str:
-    """
-    Clean name for filenames – keep spaces, remove bad characters.
-    """
     name = name.strip()
     name = re.sub(r'[\\/:"*?<>|]+', "", name)
     name = re.sub(r"\s+", " ", name)
     return name or "Invoice"
 
 def find_invoice_start_pages(pdf_bytes: bytes, trigger_text: str) -> List[int]:
-    """
-    Return 0-based page indices where a new invoice starts.
-    We detect by presence of trigger_text (e.g. ADIONA TRAVELS PVT LTD)
-    in page text.
-    """
     starts: List[int] = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for i, page in enumerate(pdf.pages):
@@ -344,10 +311,6 @@ def find_invoice_start_pages(pdf_bytes: bytes, trigger_text: str) -> List[int]:
     return starts
 
 def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tuple[int, int]]:
-    """
-    Given 0-based start pages and total pages, return list of (start, end)
-    page ranges (0-based, inclusive).
-    """
     ranges: List[Tuple[int, int]] = []
     for idx, start in enumerate(start_pages):
         if idx < len(start_pages) - 1:
@@ -359,18 +322,12 @@ def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tup
 
 def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
     """
-    From pages [start_idx, end_idx] (0-based, inclusive) of a pdfplumber PDF,
-    extract:
-      - invoice_no (str or None)
-      - total_members (int or None)
-      - first_member_name (str or None)
-      - full_text (str)  # for debug / analysis
-
-    Designed to handle both:
-      - older multi-column tables ("Name of Member")
-      - newer Asego format ("Name of Traveller")
+    Extract invoice metadata from pages [start_idx, end_idx]:
+      - invoice_no
+      - total_members
+      - first_member_name
+      - full_text (for debugging)
     """
-    # Collect text from all pages in this invoice
     texts = []
     for i in range(start_idx, end_idx + 1):
         try:
@@ -378,81 +335,44 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
         except Exception:
             t = ""
         texts.append(t)
+
     full_text = "\n".join(texts)
 
-    # -------------------------
-    # 1) Invoice number
-    # -------------------------
+    # Invoice number
     invoice_no = None
-    m = re.search(
-        r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
-        full_text,
-        flags=re.IGNORECASE
-    )
-    if not m:
-        # fallback to 'Invoice no.' variant
-        m = re.search(
-            r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
-            full_text,
-            flags=re.IGNORECASE
-        )
+    m = re.search(r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)", full_text, flags=re.IGNORECASE)
     if m:
         invoice_no = m.group(1).strip()
 
-    # -------------------------
-    # 2) Build clean line list
-    # -------------------------
-    lines_all = [ln.strip() for ln in full_text.splitlines() if ln.strip()]
+    # Total members – last numeric Sr. No. before 'Total'
+    total_members = None
+    search_area = full_text
+    idx_total = full_text.lower().find("total")
+    if idx_total != -1:
+        search_area = full_text[:idx_total]
 
-    # -------------------------
-    # 3) Find the header line ("Name of Traveller" / "Name of Member")
-    # -------------------------
-    header_idx = None
-    for idx, ln in enumerate(lines_all):
-        l = ln.lower()
-        if "name of traveller" in l or "name of member" in l:
-            header_idx = idx
-            break
+    matches = list(re.finditer(r"^\s*(\d+)\s+[A-Z]", search_area, flags=re.MULTILINE))
+    if matches:
+        try:
+            total_members = int(matches[-1].group(1))
+        except ValueError:
+            total_members = None
 
-    member_lines = []
-    if header_idx is not None:
-        # Look at lines after header until we hit "Total Amount" or similar
-        for ln in lines_all[header_idx + 1 :]:
-            low = ln.lower()
-            if low.startswith("total amount"):
-                break
-            # Row pattern: "01. NAME ..." or "1 NAME ..."
-            if re.match(r"^\d+\s*[.)]?\s+", ln):
-                member_lines.append(ln)
-
-    # -------------------------
-    # 4) Total members = number of data rows
-    # -------------------------
-    total_members = len(member_lines) if member_lines else None
-
-    # -------------------------
-    # 5) First member name
-    # -------------------------
+    # First member name (Sr. No. 1 row)
     first_member = None
-    if member_lines:
-        row_line = member_lines[0]
-        # Remove Sr. No. prefix like "01." or "1."
-        row_line = re.sub(r"^\s*\d+\s*[.)]?\s+", "", row_line).strip()
+    header_idx = full_text.lower().find("name of member")
+    segment = full_text[header_idx:] if header_idx != -1 else full_text
 
-        tokens = row_line.split()
-        name_tokens = []
-        for tok in tokens:
-            # stop at first token containing a digit (IC83152, 110070081838, etc.)
-            if re.search(r"\d", tok):
-                break
-            name_tokens.append(tok)
-
-        if name_tokens:
-            first_member = re.sub(r"\s+", " ", " ".join(name_tokens)).strip()
+    # Rough pattern: "1 NAME ... <numbers>"
+    m2 = re.search(
+        r"^\s*1\s+([A-Z][A-Za-z\s\.'-]+?)\s+\S+\s+\S+",
+        segment,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+    if m2:
+        first_member = re.sub(r"\s+", " ", m2.group(1)).strip()
 
     return invoice_no, total_members, first_member, full_text
-
-
 
 # -------------------------
 # Home page
@@ -460,16 +380,16 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
 if st.session_state["page"] == "home":
     col1, col2, _ = st.columns([1, 1, 0.3])
     with col1:
-        if st.button("🪓 Split PDF", key="split_home", help="Split a merged policy PDF into multiple policies", on_click=go_split):
+        if st.button("🪓 Split PDF", key="split_home", on_click=go_split):
             pass
         st.write("")
         st.markdown(
-            "<div class='muted'>Split a combined PDF into individual policy PDFs.<br>Duplicate names are handled automatically.</div>",
+            "<div class='muted'>Split a combined PDF into individual policy PDFs or invoices.<br>Duplicate names are handled automatically.</div>",
             unsafe_allow_html=True
         )
 
     with col2:
-        if st.button("🔗 Merge PDF", key="merge_home", help="Merge multiple PDFs into one single PDF", on_click=go_merge):
+        if st.button("🔗 Merge PDF", key="merge_home", on_click=go_merge):
             pass
         st.write("")
         st.markdown(
@@ -488,15 +408,14 @@ if st.session_state["page"] == "split":
     st.markdown("### Split PDFs")
     st.button("⬅️ Back to Home", on_click=go_home)
 
-    # Select feature: existing Policies or new Invoices
     split_feature = st.radio(
         "What do you want to split?",
         ["Policies (existing)", "Invoices (Asego Global)"],
         index=0
     )
 
-        # -------------------------
-    # POLICY splitter (existing) – cleaned & debug-friendly
+    # -------------------------
+    # POLICY SPLITTER
     # -------------------------
     if split_feature == "Policies (existing)":
         uploaded_file = st.file_uploader("Upload merged policy PDF", type=["pdf"])
@@ -542,9 +461,9 @@ if st.session_state["page"] == "split":
                 status = st.empty()
                 pages_processed = 0
 
-                # --------- Mode 1: Detect by TRAVEL PROTECTION CARD ----------
+                # Mode 1: Detect by TRAVEL PROTECTION CARD
                 if split_mode == "Detect by TRAVEL PROTECTION CARD":
-                    current_writer: PdfWriter | None = None
+                    current_writer = None
                     current_text_parts: List[str] = []
 
                     try:
@@ -571,9 +490,6 @@ if st.session_state["page"] == "split":
                                             meta.get("Name", ""),
                                             meta.get("Assist No", "")
                                         )
-                                        if not base_name:
-                                            base_name = f"Policy_{len(policies) + 1}"
-
                                         unique_name = get_unique_name(base_name, name_counter)
 
                                         buf = io.BytesIO()
@@ -599,7 +515,6 @@ if st.session_state["page"] == "split":
                                     current_writer.add_page(reader.pages[i])
                                     current_text_parts = [text]
                                 else:
-                                    # continuation of current policy
                                     if current_writer is not None:
                                         current_writer.add_page(reader.pages[i])
                                         current_text_parts.append(text)
@@ -613,9 +528,6 @@ if st.session_state["page"] == "split":
                                     meta.get("Name", ""),
                                     meta.get("Assist No", "")
                                 )
-                                if not base_name:
-                                    base_name = f"Policy_{len(policies) + 1}"
-
                                 unique_name = get_unique_name(base_name, name_counter)
 
                                 buf = io.BytesIO()
@@ -636,11 +548,11 @@ if st.session_state["page"] == "split":
                                 policy_texts.append(full_text)
                                 policy_meta_list.append(meta)
                     except Exception as e:
-                        st.error("Error while parsing PDF text. The file might be scanned or corrupted.")
+                        st.error("Error while parsing policy PDF.")
                         st.exception(e)
 
-                # --------- Mode 2: Fixed number of pages ----------
-                else:  # Fixed number of pages
+                # Mode 2: Fixed number of pages
+                else:
                     num_policies = (total_pages + pages_per_policy - 1) // pages_per_policy
                     try:
                         with pdfplumber.open(pdf_bytes_for_plumber) as pdf:
@@ -649,7 +561,7 @@ if st.session_state["page"] == "split":
                                 end_idx = min(start_idx + pages_per_policy, total_pages)
 
                                 writer = PdfWriter()
-                                texts = []
+                                texts: List[str] = []
                                 for j in range(start_idx, end_idx):
                                     writer.add_page(reader.pages[j])
                                     pages_processed += 1
@@ -662,22 +574,22 @@ if st.session_state["page"] == "split":
                                     texts.append(t)
 
                                 full_text = "\n".join(texts)
-                                meta = extract_policy_metadata_from_text(full_text) if full_text else {
-                                    "Name": "",
-                                    "Assist No": "",
-                                    "Start Date": "",
-                                    "End Date": "",
-                                    "Date of Birth": "",
-                                    "Passport Number": "",
-                                }
+                                if full_text.strip():
+                                    meta = extract_policy_metadata_from_text(full_text)
+                                else:
+                                    meta = {
+                                        "Name": "",
+                                        "Assist No": "",
+                                        "Start Date": "",
+                                        "End Date": "",
+                                        "Date of Birth": "",
+                                        "Passport Number": "",
+                                    }
 
                                 base_name = build_policy_filename(
                                     meta.get("Name", ""),
                                     meta.get("Assist No", "")
                                 )
-                                if not base_name:
-                                    base_name = f"Policy_{i + 1}"
-
                                 unique_name = get_unique_name(base_name, name_counter)
 
                                 buf = io.BytesIO()
@@ -698,7 +610,7 @@ if st.session_state["page"] == "split":
                                 policy_texts.append(full_text)
                                 policy_meta_list.append(meta)
                     except Exception as e:
-                        st.error("Error while processing PDF.")
+                        st.error("Error while processing policy PDF.")
                         st.exception(e)
 
                 progress.progress(1.0)
@@ -709,23 +621,18 @@ if st.session_state["page"] == "split":
                     st.success(f"✅ Split complete — {len(policies)} policy files created.")
                     st.write(f"⏱ Runtime: {runtime:.2f} seconds")
 
-                    # Summary table
-                    if policy_summary_rows:
-                        df = pd.DataFrame(policy_summary_rows)
-                    else:
-                        df = pd.DataFrame(
-                            [(i + 1, name) for i, (name, buf) in enumerate(policies)],
-                            columns=["#", "Filename"]
-                        )
+                    df = pd.DataFrame(policy_summary_rows) if policy_summary_rows else pd.DataFrame(
+                        [(i + 1, name) for i, (name, _) in enumerate(policies)],
+                        columns=["#", "Filename"]
+                    )
                     st.dataframe(df, use_container_width=True)
 
-                    # Debug view for policies
                     if debug_policies and policy_texts:
                         st.markdown("#### Debug: raw text and parsed metadata (policies)")
-                        for row, text, meta in zip(policy_summary_rows, policy_texts, policy_meta_list):
+                        for row, text_block, meta in zip(policy_summary_rows, policy_texts, policy_meta_list):
                             with st.expander(f"Policy {row['#']} – {row['Filename']}"):
                                 st.write("Parsed metadata:", meta)
-                                st.text(text[:4000])
+                                st.text(text_block[:4000])
 
                     # ZIP download
                     zip_buffer = io.BytesIO()
@@ -746,9 +653,8 @@ if st.session_state["page"] == "split":
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
-    
-             # -------------------------
-    # NEW: Invoice splitter (with session_state)
+    # -------------------------
+    # INVOICE SPLITTER (Asego Global)
     # -------------------------
     if split_feature == "Invoices (Asego Global)":
         uploaded_file = st.file_uploader(
@@ -766,20 +672,20 @@ if st.session_state["page"] == "split":
         )
 
         debug_mode = st.checkbox(
-            "Debug: show parsed invoice text for each invoice",
+            "Debug invoices: show parsed text per invoice",
             value=False,
             key="invoice_debug"
         )
 
         run_invoice = st.button("▶️ Run Invoice Splitter", key="run_invoice")
 
-        # Build a key that identifies the current input (file + trigger)
+        # Identify current file + trigger combo
         file_key = None
         if uploaded_file is not None:
-            file_bytes = uploaded_file.getvalue()
-            file_key = (uploaded_file.name, len(file_bytes), trigger_text.strip())
+            data_bytes = uploaded_file.getvalue()
+            file_key = (uploaded_file.name, len(data_bytes), trigger_text.strip())
 
-        # 1) Run split when button is clicked
+        # Run split
         if run_invoice:
             if not uploaded_file:
                 st.error("Please upload a PDF file first.")
@@ -787,22 +693,21 @@ if st.session_state["page"] == "split":
                 st.error("Please enter a trigger text to detect invoice starts.")
             else:
                 start_time = time.time()
-
                 reader = PdfReader(uploaded_file)
                 total_pages = len(reader.pages)
-                file_size = len(file_bytes)
+                file_size = len(data_bytes)
                 st.info(f"File info — Pages: {total_pages} • Size: {human_size(file_size)}")
                 st.write("")
 
-                start_pages_0 = find_invoice_start_pages(file_bytes, trigger_text)
+                start_pages_0 = find_invoice_start_pages(data_bytes, trigger_text)
                 if not start_pages_0:
                     st.error("No invoice start pages found using the given trigger text.")
                     st.session_state["invoice_result"] = None
                     st.stop()
 
                 ranges = compute_invoice_ranges(start_pages_0, total_pages)
+                pdf_bytes_for_plumber = io.BytesIO(data_bytes)
 
-                pdf_bytes_for_plumber = io.BytesIO(file_bytes)
                 invoices: List[Tuple[str, bytes]] = []
                 summary_rows: List[Dict[str, object]] = []
                 texts_per_invoice: List[str] = []
@@ -814,16 +719,16 @@ if st.session_state["page"] == "split":
 
                 try:
                     with pdfplumber.open(pdf_bytes_for_plumber) as pdf:
-                        for idx, (start, end) in enumerate(ranges, start=1):
+                        for idx, (start_idx, end_idx) in enumerate(ranges, start=1):
                             writer = PdfWriter()
-                            for j in range(start, end + 1):
+                            for j in range(start_idx, end_idx + 1):
                                 writer.add_page(reader.pages[j])
                                 pages_processed += 1
                                 progress.progress(pages_processed / total_pages)
                                 status.text(f"Processing pages: {pages_processed} / {total_pages}")
 
                             invoice_no, total_members, first_member, invoice_text = extract_invoice_metadata(
-                                pdf, start, end
+                                pdf, start_idx, end_idx
                             )
 
                             if first_member and total_members:
@@ -840,9 +745,8 @@ if st.session_state["page"] == "split":
 
                             buf = io.BytesIO()
                             writer.write(buf)
-                            data_bytes = buf.getvalue()
-
-                            invoices.append((unique_name, data_bytes))
+                            data_out = buf.getvalue()
+                            invoices.append((unique_name, data_out))
                             texts_per_invoice.append(invoice_text)
 
                             summary_rows.append({
@@ -850,7 +754,7 @@ if st.session_state["page"] == "split":
                                 "Filename": f"{unique_name}.pdf",
                                 "Invoice Number": invoice_no or "",
                                 "Members": total_members if total_members is not None else "",
-                                "Pages": (end - start + 1),
+                                "Pages": (end_idx - start_idx + 1),
                             })
                 except Exception as e:
                     st.error("Error while processing invoice PDF.")
@@ -862,16 +766,15 @@ if st.session_state["page"] == "split":
                 status.text("Finalizing...")
                 runtime = time.time() - start_time
 
-                # Store in session_state so downloads survive reruns
                 st.session_state["invoice_result"] = {
                     "file_key": file_key,
                     "summary_rows": summary_rows,
-                    "invoices": invoices,  # list of (name, bytes)
+                    "invoices": invoices,
                     "texts": texts_per_invoice,
                     "runtime": runtime,
                 }
 
-        # 2) Show results if we have a stored result for this file/trigger
+        # Render from session_state if available
         result = st.session_state.get("invoice_result")
         if result and file_key is not None and result["file_key"] == file_key:
             summary_rows = result["summary_rows"]
@@ -882,11 +785,10 @@ if st.session_state["page"] == "split":
             st.success(f"✅ Split complete — {len(invoices)} invoice files created.")
             st.write(f"⏱ Runtime: {runtime:.2f} seconds")
 
-            # Summary table
             df = pd.DataFrame(summary_rows)
             st.dataframe(df, use_container_width=True)
 
-            # CSV download
+            # CSV summary
             csv_bytes = df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "⬇️ Download CSV summary",
@@ -896,18 +798,19 @@ if st.session_state["page"] == "split":
                 key="dl_invoice_csv"
             )
 
-            # Debug view
+            # Debug
             if debug_mode:
-                for (name, _bytes), row, text in zip(invoices, summary_rows, texts_per_invoice):
-                    with st.expander(f"Debug: Invoice {row['#']} – {name}"):
-                        st.text(text)
+                st.markdown("#### Debug: raw text per invoice")
+                for row, text_block in zip(summary_rows, texts_per_invoice):
+                    with st.expander(f"Invoice {row['#']} – {row['Filename']}"):
+                        st.text(text_block[:4000])
 
-            # Per-invoice download
+            # Individual invoice downloads
             with st.expander("Download individual invoices"):
-                for (name, data_bytes), row in zip(invoices, summary_rows):
+                for row, (name, data_out) in zip(summary_rows, invoices):
                     st.download_button(
                         label=f"Download #{row['#']}: {name}",
-                        data=data_bytes,
+                        data=data_out,
                         file_name=f"{name}.pdf",
                         mime="application/pdf",
                         key=f"dl_invoice_{row['#']}"
@@ -916,8 +819,8 @@ if st.session_state["page"] == "split":
             # ZIP of invoices
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for name, data_bytes in invoices:
-                    zf.writestr(f"{name}.pdf", data_bytes)
+                for name, data_out in invoices:
+                    zf.writestr(f"{name}.pdf", data_out)
             zip_buffer.seek(0)
             st.download_button(
                 "⬇️ Download ZIP of invoices",
@@ -929,7 +832,6 @@ if st.session_state["page"] == "split":
 
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
-
 
 # -------------------------
 # Merge page
@@ -951,7 +853,6 @@ if st.session_state["page"] == "merge":
             st.error("Please upload one or more PDF files to merge.")
         else:
             start_time = time.time()
-            total_files = len(uploaded_files)
             progress = st.progress(0.0)
             status = st.empty()
             writer = PdfWriter()
@@ -964,7 +865,7 @@ if st.session_state["page"] == "merge":
                 except Exception:
                     pass
 
-            for f_idx, f in enumerate(uploaded_files):
+            for f in uploaded_files:
                 try:
                     r = PdfReader(f)
                 except Exception as e:
