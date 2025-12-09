@@ -321,6 +321,21 @@ def find_invoice_start_pages(pdf_bytes: bytes, trigger_text: str) -> List[int]:
     return starts
 
 
+def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tuple[int, int]]:
+    """
+    Given 0-based start pages and total pages, return list of (start, end)
+    page ranges (0-based, inclusive).
+    """
+    ranges: List[Tuple[int, int]] = []
+    for idx, start in enumerate(start_pages):
+        if idx < len(start_pages) - 1:
+            end = start_pages[idx + 1] - 1
+        else:
+            end = total_pages - 1
+        ranges.append((start, end))
+    return ranges
+
+
 def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
     """
     Extract invoice metadata from pages [start_idx, end_idx] using table extraction for robustness.
@@ -436,7 +451,7 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
             break
 
     return invoice_no, total_members, first_member, full_text
-       
+
 # -------------------------
 # Home page
 # -------------------------
@@ -716,7 +731,7 @@ if st.session_state["page"] == "split":
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
-     # -------------------------
+    # -------------------------
     # INVOICE SPLITTER (Asego Global)
     # -------------------------
     if split_feature == "Invoices (Asego Global)":
