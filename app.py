@@ -321,72 +321,121 @@ def find_invoice_start_pages(pdf_bytes: bytes, trigger_text: str) -> List[int]:
     return starts
 
 
-def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tuple[int, int]]:
-    """
-    Given 0-based start pages and total pages, return list of (start, end)
-    page ranges (0-based, inclusive).
-    """
-    ranges: List[Tuple[int, int]] = []
-    for idx, start in enumerate(start_pages):
-        if idx < len(start_pages) - 1:
-            end = start_pages[idx + 1] - 1
-        else:
-            end = total_pages - 1
-        ranges.append((start, end))
-    return ranges
-
 def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
-           """
-           Extract invoice metadata from pages [start_idx, end_idx] using table extraction for robustness.
-           """
-           full_text = ""  # For debugging, still collect text
-           traveller_rows = []  # List of (sr_no, name) tuples
+    """
+    Extract invoice metadata from pages [start_idx, end_idx] using table extraction for robustness.
+    Returns:
+        invoice_no: str
+        total_members: int
+        first_member: str
+        full_text: str
+    """
+    full_text = ""
+    traveller_rows: List[Tuple[int, str]] = []
 
-           for i in range(start_idx, end_idx + 1):
-               page = pdf.pages[i]
-               full_text += (page.extract_text() or "") + "\n"
+    for i in range(start_idx, end_idx + 1):
+        page = pdf.pages[i]
+        page_text = page.extract_text() or ""
+        full_text += page_text + "\n"
 
-               # Extract tables from the page
-               tables = page.extract_tables()
-               for table in tables:
-                   if not table:
-                       continue
-                   # Check if this is the traveller table by looking for headers
-                   headers = [cell.strip().lower() if cell else "" for cell in table[0]]
-                   if any("sr. no" in h or "name of traveller" in h or "name of member" in h for h in headers):
-                       # Assume first column is Sr. No., second is Name (adjust if needed based on format)
-                       for row in table[1:]:  # Skip header
-                           if len(row) >= 2 and row[0] and row[1]:
-                               try:
-                                   sr_no = int(re.sub(r'\D', '', str(row[0]).strip()))  # Extract digits for Sr. No.
-                                   name = str(row[1]).strip()
-                                   # Clean name: remove extra spaces, allow mixed case
-                                   name = re.sub(r'\s+', ' ', name).strip()
-                                   if name and re.match(r'^[A-Za-z\s\.\'-]+$', name):  # Basic validation
-                                       traveller_rows.append((sr_no, name))
-                               except ValueError:
-                                   continue  # Skip invalid rows
+        # Extract tables from the page
+        try:
+            tables = page.extract_tables() or []
+        except Exception:
+            tables = []
 
-           # Process extracted rows
-           total_members = max((sr for sr, _ in traveller_rows), default=0) if traveller_rows else 0
-           first_member = ""
-           if traveller_rows:
-               # Get the row with the smallest Sr. No.
-               min_sr_row = min(traveller_rows, key=lambda x: x[0])
-               first_member = min_sr_row[1]
+        for table in tables:
+            if not table or len(table) < 2:
+                # Need at least header + one row
+                continue
 
-           # Extract invoice_no from full_text (keep existing logic)
-           invoice_no = ""
-           for pattern in [
-               r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
-               r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
-           ]:
-               m = re.search(pattern, full_text, flags=re.IGNORECASE)
-               if m:
-                   invoice_no = m.group(1).strip()
-                   break
+            headers_raw = table[0]
+            headers = [(cell or "").strip().lower() for cell in headers_raw]
 
-           return invoice_no, total_members, first_member, full_text
+            # --- Detect column indices dynamically ---
+            sr_idx = -1
+            name_idx = -1
+
+            for col_idx, h in enumerate(headers):
+                h_norm = " ".join(h.split())  # normalize spaces
+
+                # Sr No column (handles 'sr no', 'sr. no', 's no', 's. no', etc)
+                if sr_idx == -1 and (
+                    ("sr" in h_norm and "no" in h_norm)
+                    or "s. no" in h_norm
+                    or "s. no." in h_norm
+                    or "s.no" in h_norm
+                ):
+                    sr_idx = col_idx
+
+                # Name column (handles traveller/member/passenger/insured variants)
+                if name_idx == -1 and ("name" in h_norm) and (
+                    "traveller" in h_norm
+                    or "traveler" in h_norm
+                    or "member" in h_norm
+                    or "passenger" in h_norm
+                    or "insured" in h_norm
+                ):
+                    name_idx = col_idx
+
+            # If we cannot locate a name column, this is not the traveller table
+            if name_idx == -1:
+                continue
+
+            # --- Parse data rows ---
+            for row in table[1:]:
+                if not row or len(row) <= name_idx:
+                    continue
+
+                # Sr No (optional; use 0 if missing/not numeric)
+                sr_val = row[sr_idx] if (sr_idx != -1 and sr_idx < len(row)) else None
+                sr_no = 0
+                if sr_val is not None:
+                    digits = re.sub(r"\D", "", str(sr_val))
+                    if digits.isdigit():
+                        sr_no = int(digits)
+
+                # Name cell
+                name_val = row[name_idx]
+                if not name_val:
+                    continue
+
+                name = re.sub(r"\s+", " ", str(name_val).strip())
+                if not name:
+                    continue
+
+                # Basic validation: only letters, spaces, dots, hyphens, apostrophes
+                if not re.match(r"^[A-Za-z\s\.\'-]+$", name):
+                    continue
+
+                traveller_rows.append((sr_no, name))
+
+    # --- Process extracted traveller rows ---
+    if traveller_rows:
+        # Prefer rows with sr_no > 0; if none, fallback to raw order
+        rows_with_sr = [t for t in traveller_rows if t[0] > 0]
+        if rows_with_sr:
+            first_member = min(rows_with_sr, key=lambda x: x[0])[1]
+            total_members = max(sr for sr, _ in rows_with_sr)
+        else:
+            first_member = traveller_rows[0][1]
+            total_members = len(traveller_rows)
+    else:
+        first_member = ""
+        total_members = 0
+
+    # --- Extract invoice number from full_text (your existing logic) ---
+    invoice_no = ""
+    for pattern in [
+        r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+        r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+    ]:
+        m = re.search(pattern, full_text, flags=re.IGNORECASE)
+        if m:
+            invoice_no = m.group(1).strip()
+            break
+
+    return invoice_no, total_members, first_member, full_text
        
 # -------------------------
 # Home page
