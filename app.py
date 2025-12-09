@@ -489,7 +489,7 @@ if st.session_state["page"] == "split":
                                      full_text = "\n".join(current_text_parts)
                                      meta = extract_policy_metadata_from_text(full_text)
                                         
-                                        base_name = build_policy_filename(
+                                    base_name = build_policy_filename(
                                             meta.get("Name", ""),
                                             meta.get("Assist No", "")
                                         )
