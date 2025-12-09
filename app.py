@@ -307,7 +307,7 @@ def find_invoice_start_pages(pdf_bytes: bytes, trigger_text: str) -> List[int]:
     Return 0-based page indices where a new invoice starts.
 
     We detect by presence of trigger_text (e.g. 'ADIONA TRAVELS PVT LTD'
-    or 'Tax Invoice' or 'Asego Global Assistance Limited') in page text.
+    or 'Tax Invoice') in page text.
     """
     starts: List[int] = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -336,22 +336,18 @@ def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tup
     return ranges
 
 
-def extract_invoice_metadata(
-    pdf,
-    start_idx: int,
-    end_idx: int
-) -> Tuple[str | None, int | None, str | None, str]:
+def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
     """
     Extract invoice metadata from pages [start_idx, end_idx]:
 
-      - invoice_no: e.g. 12300105 or INV-10124343
-      - total_members: highest Sr. No. in 'Name of Member / Traveller' table
+      - invoice_no: e.g. 12298282 or INV-10124343
+      - total_members: highest Sr. No. in traveller table
       - first_member: full name of Sr. No. 1
-      - full_text: concatenated text (for debugging if needed)
+      - full_text: concatenated text (for debugging)
 
     Works for:
-      - Old Adiona invoices: 'Sr. No. / Name of Member ...' rows
-      - New Matrix invoices: 'Sr. No. Name of Traveller ...' rows
+      - Old Adiona invoices: 'Sr. No. / Name of Member ...'
+      - New Matrix invoices: 'Sr. No. Name of Traveller ...'
     """
     texts: List[str] = []
     for i in range(start_idx, end_idx + 1):
@@ -364,60 +360,52 @@ def extract_invoice_metadata(
     full_text = "\n".join(texts)
 
     # ---------- Invoice number ----------
-    invoice_no: str | None = None
+    invoice_no = ""
     for pattern in [
-        r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",  # old: 'Invoice no. : 12300105'
-        r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",  # new: 'Invoice No. : INV-10124343'
+        r"Invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
+        r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)",
     ]:
         m = re.search(pattern, full_text, flags=re.IGNORECASE)
         if m:
             invoice_no = m.group(1).strip()
             break
 
-    # ---------- Find passenger table region ----------
-    # Try to start from 'Name of Member' (old) or 'Name of Traveller' (new)
-    lower = full_text.lower()
-    idx_member = lower.find("name of member")
-    idx_traveller = lower.find("name of traveller")
-
-    header_idx_candidates = [i for i in [idx_member, idx_traveller] if i != -1]
-    if header_idx_candidates:
-        header_idx = min(header_idx_candidates)
-        area = full_text[header_idx:]
-    else:
-        area = full_text
-
-    # Cut off after 'Total Amount' if present
+    # ---------- Limit to table area (before 'Total Amount') ----------
+    area = full_text
     idx_total = area.lower().find("total amount")
     if idx_total != -1:
         area = area[:idx_total]
 
-    # ---------- Find all Sr. No. rows ----------
-    # Old format rows: '1 ROHIT BHALLA 0 110070112795 ...'
-    # New format rows: '01. ANCHAL NARAYAN IC83152 2396.62 ...'
+    # ---------- Sr. No. rows for both formats ----------
+    # Example old: "1 ROHIT BHALLA 0 110070112795 70012795 118.64 ... "
+    # Example new: "01. ANCHAL NARAYAN IC83152 2396.62 431.38 2828.00"
+    # We want:
+    #   group(1) -> "1" or "01"
+    #   group(2) -> "ROHIT BHALLA" / "ANCHAL NARAYAN"
     sr_pattern = re.compile(
-        r"^\s*(\d+)\.?\s+([A-Z][A-Za-z\s\.'-]+?)\s+\S+",
+        r"^\s*(\d+)\.?\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*)\s+\S+",
         flags=re.MULTILINE
     )
 
     matches = list(sr_pattern.finditer(area))
 
-    total_members: int | None = None
-    first_member: str | None = None
+    total_members = 0
+    first_member = ""
 
     if matches:
         # Total pax = highest Sr. No.
         try:
             total_members = max(int(m.group(1)) for m in matches)
         except ValueError:
-            total_members = None
+            total_members = 0
 
-        # First pax = smallest Sr. No. (normally 1)
+        # First pax = smallest Sr. No. (normally 1 / 01)
         first_match = min(matches, key=lambda m: int(m.group(1)))
         first_member_raw = first_match.group(2)
         first_member = re.sub(r"\s+", " ", first_member_raw).strip()
 
     return invoice_no, total_members, first_member, full_text
+
 
 # -------------------------
 # Home page
@@ -698,7 +686,7 @@ if st.session_state["page"] == "split":
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
-           # -------------------------
+     # -------------------------
     # INVOICE SPLITTER (Asego Global)
     # -------------------------
     if split_feature == "Invoices (Asego Global)":
@@ -714,6 +702,12 @@ if st.session_state["page"] == "split":
             placeholder="e.g. ADIONA TRAVELS PVT LTD or Tax Invoice",
             help="Each time this text appears on a new page, a new invoice is assumed to start.",
             key="invoice_trigger"
+        )
+
+        debug_mode = st.checkbox(
+            "Debug invoices (show raw text per invoice)",
+            value=False,
+            key="invoice_debug"
         )
 
         run_invoice = st.button("▶️ Run Invoice Splitter", key="run_invoice")
@@ -744,6 +738,8 @@ if st.session_state["page"] == "split":
 
                 invoices: List[Tuple[str, bytes]] = []
                 summary_rows: List[Dict[str, object]] = []
+                texts_per_invoice: List[str] = []
+                name_counter: Dict[str, int] = {}
 
                 progress = st.progress(0.0)
                 status = st.empty()
@@ -751,8 +747,6 @@ if st.session_state["page"] == "split":
 
                 try:
                     with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
-                        name_counter: Dict[str, int] = {}
-
                         for idx, (start_idx, end_idx) in enumerate(ranges, start=1):
                             writer = PdfWriter()
                             for j in range(start_idx, end_idx + 1):
@@ -761,13 +755,13 @@ if st.session_state["page"] == "split":
                                 progress.progress(pages_processed / total_pages)
                                 status.text(f"Processing pages: {pages_processed} / {total_pages}")
 
-                            invoice_no, total_members, first_member, _ = extract_invoice_metadata(
+                            invoice_no, total_members, first_member, full_text = extract_invoice_metadata(
                                 pdf, start_idx, end_idx
                             )
 
-                            # ---------- STRICT requirement ----------
-                            # Filename = first pax full name x total pax (if both exist)
-                            if first_member and total_members is not None:
+                            # STRICT requirement:
+                            # filename = first pax full name x total pax
+                            if first_member and total_members > 0:
                                 base_name = f"{first_member} x {total_members}"
                             elif first_member:
                                 base_name = first_member
@@ -783,15 +777,15 @@ if st.session_state["page"] == "split":
                             writer.write(buf)
                             data_out = buf.getvalue()
                             invoices.append((unique_name, data_out))
+                            texts_per_invoice.append(full_text)
 
                             summary_rows.append({
                                 "#": idx,
                                 "Filename": f"{unique_name}.pdf",
-                                "Invoice Number": invoice_no or "",
-                                "Members (pax)": total_members if total_members is not None else "",
+                                "Invoice Number": invoice_no,
+                                "Members (pax)": total_members if total_members > 0 else "",
                                 "Pages": (end_idx - start_idx + 1),
                             })
-
                 except Exception as e:
                     st.error("Error while processing invoice PDF.")
                     st.exception(e)
@@ -808,6 +802,13 @@ if st.session_state["page"] == "split":
                     # Summary table
                     df = pd.DataFrame(summary_rows)
                     st.dataframe(df, use_container_width=True)
+
+                    # Debug (optional)
+                    if debug_mode:
+                        st.markdown("#### Debug: raw text per invoice")
+                        for row, text_block in zip(summary_rows, texts_per_invoice):
+                            with st.expander(f"Invoice {row['#']} – {row['Filename']}"):
+                                st.text(text_block[:4000])
 
                     # CSV download
                     csv_bytes = df.to_csv(index=False).encode("utf-8")
