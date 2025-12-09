@@ -101,7 +101,8 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
       - End Date
       - Date of Birth
       - Passport Number
-    Works for ICICI Lombard + Zurich Kotak Asego formats. :contentReference[oaicite:1]{index=1}
+
+    Works for old TRAVEL PROTECTION CARD format and newer Asego policy PDFs.
     """
     meta = {
         "Name": "",
@@ -112,18 +113,23 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         "Passport Number": "",
     }
 
-    # Helper
     def first_match(pattern: str, flags=re.IGNORECASE):
         m = re.search(pattern, full_text, flags)
         return m.group(1).strip() if m else ""
 
-    # Assist No: "Assist No.IC83151EN1" or "Assist No.10009995"
+    # -------------------------
+    # Assist No  (e.g. IC83151EN1, 10009995)
+    # -------------------------
     assist = first_match(r"Assist\s*No\.?\s*[:.]?\s*([A-Za-z0-9]+)")
     meta["Assist No"] = assist
 
-    # Name: Prefer "Insured Name: ..." then fallback to "Traveller\n..."
+    # -------------------------
+    # Name
+    # -------------------------
     name = first_match(r"Insured\s+Name\s*:\s*([A-Z][A-Za-z\s\.'-]+)")
+
     if not name:
+        # "Traveller" on one line, name on next
         m = re.search(
             r"Traveller\s*\n\s*([A-Z][A-Za-z\s\.'-]+)",
             full_text,
@@ -133,7 +139,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
             name = m.group(1)
 
     if not name:
-        # very generic fallback: "Name: XYZ" but avoid "Name of ..."
+        # Generic "Name: XYZ" but avoid "Name of ..."
         m = re.search(
             r"\bName\s*:\s*([A-Z][A-Za-z\s\.'-]+)",
             full_text,
@@ -143,23 +149,43 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
             name = m.group(1)
 
     if name:
+        # Normalize spaces
         name = re.sub(r"\s+", " ", name).strip()
+        # HARD CUT: drop anything starting with "Date ..."
+        # This removes "Date of your", "Date of Birth", "Date o", etc.
+        for pat in [r"\s+Date\b", r"\s+Dat\b"]:
+            parts = re.split(pat, name)
+            if parts:
+                name = parts[0].strip()
+        name = re.sub(r"\s+", " ", name).strip()
+
     meta["Name"] = name
 
-    # Start / End date: first try "Commencement Date: From: ... End Date: ..."
+    # -------------------------
+    # Start / End Date
+    # -------------------------
     start_date = ""
     end_date = ""
+
+    # Pattern 1: Commencement Date: From: dd/mm/yyyy End Date: dd/mm/yyyy
     m = re.search(
         r"Commencement\s+Date\s*:\s*From\s*:\s*([0-9/]+)\s*End\s*Date\s*:\s*([0-9/]+)",
         full_text,
         flags=re.IGNORECASE
     )
     if not m:
-        # Fallback: Travel Protection Card layout: "Start Date\n10/12/2025 ... End Date\n13/01/2026"
+        # Pattern 2: Start Date\n<date> ... End Date\n<date>
         m = re.search(
             r"Start\s*Date\s*\n\s*([0-9/]+).*?End\s*Date\s*\n\s*([0-9/]+)",
             full_text,
             flags=re.IGNORECASE | re.DOTALL
+        )
+    if not m:
+        # Pattern 3: "Date of your travel : dd/mm/yyyy to dd/mm/yyyy"
+        m = re.search(
+            r"Date\s+of\s+your\s+travel\s*[:\-]?\s*([0-9/]+)\s*(?:to|-)\s*([0-9/]+)",
+            full_text,
+            flags=re.IGNORECASE
         )
     if m:
         start_date, end_date = m.group(1).strip(), m.group(2).strip()
@@ -167,16 +193,19 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     meta["Start Date"] = start_date
     meta["End Date"] = end_date
 
+    # -------------------------
     # Date of Birth
-    dob = first_match(r"Date\s+of\s+Birth\s*:\s*([0-9/]+)")
+    # -------------------------
+    dob = first_match(r"Date\s+of\s+Birth\s*[:\-]?\s*([0-9/]+)")
     meta["Date of Birth"] = dob
 
+    # -------------------------
     # Passport Number
-    passport = first_match(r"Passport\s+Number\s*:\s*([A-Z0-9]+)")
+    # -------------------------
+    passport = first_match(r"Passport\s+Number\s*[:\-]?\s*([A-Z0-9]+)")
     meta["Passport Number"] = passport
 
-    return meta
-
+return meta
 
 def build_policy_filename(name: str, assist_no: str) -> str:
     """
@@ -456,17 +485,18 @@ if st.session_state["page"] == "split":
                                         size_bytes = len(buf.getvalue())
                                         policies.append((unique_name, buf))
 
-                                        policy_summary_rows.append({
-                                            "#": len(policy_summary_rows) + 1,
-                                            "Filename": f"{unique_name}.pdf",
-                                            "Size (bytes)": size_bytes,
-                                            "Name": meta.get("Name", ""),
-                                            "Assist No": meta.get("Assist No", ""),
-                                            "Start Date": meta.get("Start Date", ""),
-                                            "End Date": meta.get("End Date", ""),
-                                            "Date of Birth": meta.get("Date of Birth", ""),
-                                            "Passport Number": meta.get("Passport Number", ""),
-                                        })
+                                    policy_summary_rows.append({
+                                        "#": len(policy_summary_rows) + 1,
+                                        "Filename": f"{unique_name}.pdf",
+                                        "Name": meta.get("Name", ""),
+                                        "Assist No": meta.get("Assist No", ""),
+                                        "Start Date": meta.get("Start Date", ""),
+                                        "End Date": meta.get("End Date", ""),
+                                        "Date of Birth": meta.get("Date of Birth", ""),
+                                        "Passport Number": meta.get("Passport Number", ""),
+                                    })
+
+
 
                                     # start new policy
                                     current_writer = PdfWriter()
