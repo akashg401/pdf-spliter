@@ -335,8 +335,7 @@ def compute_invoice_ranges(start_pages: List[int], total_pages: int) -> List[Tup
         ranges.append((start, end))
     return ranges
 
-
-       def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
+def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, int, str, str]:
            """
            Extract invoice metadata from pages [start_idx, end_idx] using table extraction for robustness.
            """
