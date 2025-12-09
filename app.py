@@ -205,7 +205,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     passport = first_match(r"Passport\s+Number\s*[:\-]?\s*([A-Z0-9]+)")
     meta["Passport Number"] = passport
 
-return meta
+    return meta
 
 def build_policy_filename(name: str, assist_no: str) -> str:
     """
