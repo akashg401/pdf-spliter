@@ -117,15 +117,11 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
         m = re.search(pattern, full_text, flags)
         return m.group(1).strip() if m else ""
 
-    # -------------------------
     # Assist No  (e.g. IC83151EN1, 10009995)
-    # -------------------------
     assist = first_match(r"Assist\s*No\.?\s*[:.]?\s*([A-Za-z0-9]+)")
     meta["Assist No"] = assist
 
-    # -------------------------
     # Name
-    # -------------------------
     name = first_match(r"Insured\s+Name\s*:\s*([A-Z][A-Za-z\s\.'-]+)")
 
     if not name:
@@ -151,8 +147,7 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     if name:
         # Normalize spaces
         name = re.sub(r"\s+", " ", name).strip()
-        # HARD CUT: drop anything starting with "Date ..."
-        # This removes "Date of your", "Date of Birth", "Date o", etc.
+        # HARD CUT: drop anything starting with "Date ..." or "Dat ..."
         for pat in [r"\s+Date\b", r"\s+Dat\b"]:
             parts = re.split(pat, name)
             if parts:
@@ -161,27 +156,25 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
 
     meta["Name"] = name
 
-    # -------------------------
     # Start / End Date
-    # -------------------------
     start_date = ""
     end_date = ""
 
-    # Pattern 1: Commencement Date: From: dd/mm/yyyy End Date: dd/mm/yyyy
+    # 1) Commencement Date: From: dd/mm/yyyy End Date: dd/mm/yyyy
     m = re.search(
         r"Commencement\s+Date\s*:\s*From\s*:\s*([0-9/]+)\s*End\s*Date\s*:\s*([0-9/]+)",
         full_text,
         flags=re.IGNORECASE
     )
     if not m:
-        # Pattern 2: Start Date\n<date> ... End Date\n<date>
+        # 2) Start Date\n<date> ... End Date\n<date>
         m = re.search(
             r"Start\s*Date\s*\n\s*([0-9/]+).*?End\s*Date\s*\n\s*([0-9/]+)",
             full_text,
             flags=re.IGNORECASE | re.DOTALL
         )
     if not m:
-        # Pattern 3: "Date of your travel : dd/mm/yyyy to dd/mm/yyyy"
+        # 3) "Date of your travel : dd/mm/yyyy to dd/mm/yyyy"
         m = re.search(
             r"Date\s+of\s+your\s+travel\s*[:\-]?\s*([0-9/]+)\s*(?:to|-)\s*([0-9/]+)",
             full_text,
@@ -193,19 +186,16 @@ def extract_policy_metadata_from_text(full_text: str) -> Dict[str, str]:
     meta["Start Date"] = start_date
     meta["End Date"] = end_date
 
-    # -------------------------
     # Date of Birth
-    # -------------------------
     dob = first_match(r"Date\s+of\s+Birth\s*[:\-]?\s*([0-9/]+)")
     meta["Date of Birth"] = dob
 
-    # -------------------------
     # Passport Number
-    # -------------------------
     passport = first_match(r"Passport\s+Number\s*[:\-]?\s*([A-Z0-9]+)")
     meta["Passport Number"] = passport
 
     return meta
+
 
 def build_policy_filename(name: str, assist_no: str) -> str:
     """
@@ -220,7 +210,6 @@ def build_policy_filename(name: str, assist_no: str) -> str:
     else:
         return ""
 
-    # Remove bad chars and normalize spaces
     raw = re.sub(r'[\\/:"*?<>|]+', "", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
     return raw.replace(" ", "_")
@@ -405,9 +394,8 @@ if st.session_state["page"] == "split":
         ["Policies (existing)", "Invoices (Asego Global)"],
         index=0
     )
-
     # -------------------------
-    # Existing POLICY splitter (unchanged, just wrapped)
+    # Existing POLICY splitter (rewritten, robust)
     # -------------------------
     if split_feature == "Policies (existing)":
         uploaded_file = st.file_uploader("Upload merged policy PDF", type=["pdf"])
@@ -446,8 +434,9 @@ if st.session_state["page"] == "split":
                 status = st.empty()
                 pages_processed = 0
 
-            if split_mode == "Detect by TRAVEL PROTECTION CARD":
-                    current_writer = None
+                # --------- Mode 1: Detect by TRAVEL PROTECTION CARD ----------
+                if split_mode == "Detect by TRAVEL PROTECTION CARD":
+                    current_writer: PdfWriter | None = None
                     current_text_parts: List[str] = []
 
                     try:
@@ -482,21 +471,18 @@ if st.session_state["page"] == "split":
                                         buf = io.BytesIO()
                                         current_writer.write(buf)
                                         buf.seek(0)
-                                        size_bytes = len(buf.getvalue())
                                         policies.append((unique_name, buf))
 
-                                    policy_summary_rows.append({
-                                        "#": len(policy_summary_rows) + 1,
-                                        "Filename": f"{unique_name}.pdf",
-                                        "Name": meta.get("Name", ""),
-                                        "Assist No": meta.get("Assist No", ""),
-                                        "Start Date": meta.get("Start Date", ""),
-                                        "End Date": meta.get("End Date", ""),
-                                        "Date of Birth": meta.get("Date of Birth", ""),
-                                        "Passport Number": meta.get("Passport Number", ""),
-                                    })
-
-
+                                        policy_summary_rows.append({
+                                            "#": len(policy_summary_rows) + 1,
+                                            "Filename": f"{unique_name}.pdf",
+                                            "Name": meta.get("Name", ""),
+                                            "Assist No": meta.get("Assist No", ""),
+                                            "Start Date": meta.get("Start Date", ""),
+                                            "End Date": meta.get("End Date", ""),
+                                            "Date of Birth": meta.get("Date of Birth", ""),
+                                            "Passport Number": meta.get("Passport Number", ""),
+                                        })
 
                                     # start new policy
                                     current_writer = PdfWriter()
@@ -525,13 +511,11 @@ if st.session_state["page"] == "split":
                                 buf = io.BytesIO()
                                 current_writer.write(buf)
                                 buf.seek(0)
-                                size_bytes = len(buf.getvalue())
                                 policies.append((unique_name, buf))
 
                                 policy_summary_rows.append({
                                     "#": len(policy_summary_rows) + 1,
                                     "Filename": f"{unique_name}.pdf",
-                                    "Size (bytes)": size_bytes,
                                     "Name": meta.get("Name", ""),
                                     "Assist No": meta.get("Assist No", ""),
                                     "Start Date": meta.get("Start Date", ""),
@@ -543,67 +527,86 @@ if st.session_state["page"] == "split":
                         st.error("Error while parsing PDF text. The file might be scanned or corrupted.")
                         st.exception(e)
 
-
-            else:  # Fixed number of pages
+                # --------- Mode 2: Fixed number of pages ----------
+                else:  # Fixed number of pages
                     num_policies = (total_pages + pages_per_policy - 1) // pages_per_policy
                     try:
                         with pdfplumber.open(pdf_bytes_for_plumber) as pdf:
                             for i in range(num_policies):
-                                start = i * pages_per_policy
-                                end = min(start + pages_per_policy, total_pages)
+                                start_idx = i * pages_per_policy
+                                end_idx = min(start_idx + pages_per_policy, total_pages)
+
                                 writer = PdfWriter()
-                                for j in range(start, end):
+                                texts = []
+                                for j in range(start_idx, end_idx):
                                     writer.add_page(reader.pages[j])
                                     pages_processed += 1
                                     progress.progress(pages_processed / total_pages)
                                     status.text(f"Gathering pages: {pages_processed} / {total_pages}")
+                                    try:
+                                        t = pdf.pages[j].extract_text() or ""
+                                    except Exception:
+                                        t = ""
+                                    texts.append(t)
 
-                                try:
-                                    text = pdf.pages[start].extract_text() or ""
-                                except Exception:
-                                    text = ""
-                                found_name = None
-                                for line in text.splitlines():
-                                    if "NAME" in line.upper():
-                                        found_name = clean_name(line)
-                                        break
-                                current_name = found_name if found_name else f"Policy_{i+1}"
-                                unique_name = get_unique_name(current_name, name_counter)
+                                full_text = "\n".join(texts)
+                                meta = extract_policy_metadata_from_text(full_text) if full_text else {
+                                    "Name": "",
+                                    "Assist No": "",
+                                    "Start Date": "",
+                                    "End Date": "",
+                                    "Date of Birth": "",
+                                    "Passport Number": "",
+                                }
+
+                                base_name = build_policy_filename(
+                                    meta.get("Name", ""),
+                                    meta.get("Assist No", "")
+                                )
+                                if not base_name:
+                                    base_name = f"Policy_{i + 1}"
+
+                                unique_name = get_unique_name(base_name, name_counter)
 
                                 buf = io.BytesIO()
                                 writer.write(buf)
                                 buf.seek(0)
                                 policies.append((unique_name, buf))
+
+                                policy_summary_rows.append({
+                                    "#": len(policy_summary_rows) + 1,
+                                    "Filename": f"{unique_name}.pdf",
+                                    "Name": meta.get("Name", ""),
+                                    "Assist No": meta.get("Assist No", ""),
+                                    "Start Date": meta.get("Start Date", ""),
+                                    "End Date": meta.get("End Date", ""),
+                                    "Date of Birth": meta.get("Date of Birth", ""),
+                                    "Passport Number": meta.get("Passport Number", ""),
+                                })
                     except Exception as e:
                         st.error("Error while processing PDF.")
                         st.exception(e)
 
-            progress.progress(1.0)
-            status.text("Finalizing...")
-            runtime = time.time() - start_time
+                progress.progress(1.0)
+                status.text("Finalizing...")
+                runtime = time.time() - start_time
 
-
-            if policies:
+                if policies:
                     st.success(f"✅ Split complete — {len(policies)} policy files created.")
                     st.write(f"⏱ Runtime: {runtime:.2f} seconds")
 
-                    # If we built rich metadata (TRAVEL PROTECTION CARD mode), use it.
+                    # Build DataFrame from summary rows
                     if policy_summary_rows:
                         df = pd.DataFrame(policy_summary_rows)
                     else:
-                        # Fallback for fixed-pages mode or old formats
                         df = pd.DataFrame(
-                            [(i + 1, name, len(buf.getvalue())) for i, (name, buf) in enumerate(policies)],
-                            columns=["#", "Filename", "Size (bytes)"]
+                            [(i + 1, name) for i, (name, buf) in enumerate(policies)],
+                            columns=["#", "Filename"]
                         )
 
-                    # Human-readable size
-                    if "Size (bytes)" in df.columns:
-                        df["Size"] = df["Size (bytes)"].apply(human_size)
-                        # keep both or drop; your choice. I'll keep both for clarity.
                     st.dataframe(df, use_container_width=True)
 
-                    # ZIP only (same as before)
+                    # ZIP only
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w") as zf:
                         for name, buf in policies:
@@ -616,13 +619,14 @@ if st.session_state["page"] == "split":
                         file_name=zip_filename,
                         mime="application/zip"
                     )
-            else:
+                else:
                     st.error("No policies were produced. Check file and split settings.")
 
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
-         # -------------------------
+    
+             # -------------------------
     # NEW: Invoice splitter (with session_state)
     # -------------------------
     if split_feature == "Invoices (Asego Global)":
