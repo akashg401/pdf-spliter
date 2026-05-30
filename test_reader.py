@@ -37,3 +37,5 @@ print(
 )
 print(normalized[["address_line_1", "pincode"]].head())
 
+print("Charge Column Found:", charge_col)
+print(df[charge_col].head())

@@ -69,6 +69,9 @@ def go_merge():
 def go_csv():
     st.session_state["page"] = "csv"
 
+def go_policy():
+    st.session_state["page"] = "policy"
+
 # -------------------------
 # Helper functions (generic)
 # -------------------------
@@ -680,7 +683,7 @@ def run_csv_formatter():
 # Home page
 # -------------------------
 if st.session_state["page"] == "home":
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         st.button("🪓 Split PDF", use_container_width=True, on_click=go_split)
@@ -693,9 +696,14 @@ if st.session_state["page"] == "home":
         st.caption("Upload multiple PDFs and merge them into a single file.")
 
     with col3:
-        st.button("📄 Format CSV", use_container_width=True, on_click=go_csv)
+        st.button("📊 Format CSV", use_container_width=True, on_click=go_csv)
 
         st.caption("Format Excel data into portal-ready CSV files.")
+    
+    with col4:
+        st.button("📰 Download PDFs", use_container_width=True, on_click=go_policy)
+
+        st.caption("Download issued policy PDFs.")
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("<div class='muted'>Choose a tool to get started.</div>", unsafe_allow_html=True)
@@ -1168,5 +1176,102 @@ if st.session_state["page"] == "merge":
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
-if st.session_state["page"] == "csv":
-    run_csv_formatter()
+# -------------------------
+# Policy Downloader page
+# -------------------------
+if st.session_state["page"] == "policy":
+
+    st.markdown("### Policy Downloader")
+
+    st.button(
+        "⬅️ Back to Home",
+        on_click=go_home
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload Asego Policy Report",
+        type=["xlsx"]
+    )
+
+    if uploaded_file:
+
+        from modules.policy_downloader import (
+            read_policy_file,
+            get_policy_summary
+        )
+
+        df = read_policy_file(uploaded_file)
+
+        policies, charges = get_policy_summary(df)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.metric(
+                "Policies Issued",
+                policies
+            )
+
+        with col2:
+            st.metric(
+                "Charges",
+                f"₹{charges:,.2f}"
+            )
+
+        summary_text = (
+            f"Policies Issued: {policies}\n"
+            f"Charges: ₹{charges:,.2f}"
+        )
+
+        st.text_area(
+            "Mail Summary",
+            summary_text,
+            height=100
+        )
+
+        st.dataframe(df.head())
+
+        from modules.policy_downloader import read_policy_links
+        link_df = read_policy_links(
+            uploaded_file
+        )
+
+        
+
+    if uploaded_file and st.button("⬇ Download Policy PDFs"):
+        from modules.policy_downloader import download_policy_pdfs
+
+        progress_bar = st.progress(0)
+        status_box = st.empty()
+
+        def update_progress(current, total, elapsed, eta):
+            progress_bar.progress(current / total)
+            status_box.info(
+                f"""
+Downloading {current}/{total}
+Elapsed Time: {int(elapsed)} sec
+"""
+            )
+
+        zip_path, ok, fail, total_time = download_policy_pdfs(
+            link_df,
+            progress_callback=update_progress
+        )
+
+        status_box.success(
+            f"✅ Completed\n\n"
+            f"Downloaded: {ok}\n\n"
+            f"Failed: {fail}\n\n"
+            f"Total Time: {int(total_time)} sec"
+        )
+
+        with open(zip_path, "rb") as f:
+            st.download_button(
+                label="📦 Download ZIP",
+                data=f,
+                file_name=zip_path.name,
+                mime="application/zip"
+            )
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
