@@ -6,8 +6,12 @@ import zipfile
 import re
 import time
 import math
+import tempfile
 import pandas as pd
+from pathlib import Path
 from typing import Tuple, Dict, List
+from modules.pax.pipeline import process_file
+from openpyxl.styles import PatternFill
 
 # -------------------------
 # Page config + CSS
@@ -50,6 +54,9 @@ if "page" not in st.session_state:
 if "invoice_result" not in st.session_state:
     st.session_state["invoice_result"] = None
 
+if "csv_formatter_result" not in st.session_state:
+    st.session_state["csv_formatter_result"] = None
+
 def go_home():
     st.session_state["page"] = "home"
 
@@ -58,6 +65,9 @@ def go_split():
 
 def go_merge():
     st.session_state["page"] = "merge"
+
+def go_csv():
+    st.session_state["page"] = "csv"
 
 # -------------------------
 # Helper functions (generic)
@@ -80,6 +90,100 @@ def get_unique_name(name: str, existing_names: Dict[str, int]) -> str:
 
 def safe_pdfplumber_open(uploaded_file) -> io.BytesIO:
     return io.BytesIO(uploaded_file.getvalue())
+
+
+NEW_PORTAL_FIELD_TO_COLUMN = {
+    "start_date": "Start Date(DD/MM/YYYY)*",
+    "end_date": "End Date(DD/MM/YYYY)*",
+    "passport_number": "Passport Number*",
+    "full_name": "Name*",
+    "gender": "Gender*",
+    "dob": "Date of Birth(DD/MM/YYYY)*",
+    "nominee": "Nominee*",
+    "nominee_relation": "Relationship*",
+    "address_line_1": "Address*",
+    "pincode": "Pincode*",
+    "city": "City*",
+    "district": "District*",
+    "state": "State*",
+    "country": "Country*",
+    "mobile_number": "Mobile Number (Without Code)*",
+    "email": "Email Address*",
+    "remarks": "Remarks",
+    "cr_reference": "CR Reference Number",
+    "past_illness": "Past Illness",
+    "emergency_contact_name": "Emergency Contact Person",
+    "emergency_contact_number": "Emergency Contact Number",
+    "emergency_email": "Emergency Email ID",
+    "gst_number": "GST Number",
+    "gst_state": "GST State",
+}
+
+OLD_PORTAL_FIELD_TO_COLUMN = {
+    "start_date": "Commence Date",
+    "end_date": "End Date",
+    "full_name": "Name",
+    "passport_number": "Passport Number",
+    "dob": "Dob",
+    "address_line_1": "Address",
+    "address_line_2": "Address 2",
+    "pincode": "Pincode",
+    "city": "City",
+    "district": "District",
+    "state": "State",
+    "country": "Country",
+    "phone_number": "Phone Number",
+    "mobile_number": "Mobile Number",
+    "nominee": "Nominee",
+    "nominee_relation": "Relation",
+    "past_illness": "Past Illness",
+    "email": "Emailaddess",
+    "cr_reference": "CR",
+    "gst_number": "Gstno",
+}
+
+
+def clean_download_name(name: str, extension: str) -> str:
+    cleaned = re.sub(r'[\\/:"*?<>|]+', "", name or "").strip()
+    cleaned = re.sub(r"\s+", "_", cleaned)
+    if not cleaned:
+        cleaned = "formatted_output"
+    return f"{cleaned}.{extension}"
+
+
+def build_highlighted_excel(df: pd.DataFrame, error_report: pd.DataFrame, portal_key: str) -> bytes:
+    output = io.BytesIO()
+    sheet_name = "Dolphin Upload" if portal_key == "new" else "Global Upload"
+    field_map = NEW_PORTAL_FIELD_TO_COLUMN if portal_key == "new" else OLD_PORTAL_FIELD_TO_COLUMN
+    yellow_fill = PatternFill(fill_type="solid", fgColor="FFF2CC")
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        worksheet = writer.book[sheet_name]
+
+        column_positions = {
+            cell.value: cell.column
+            for cell in worksheet[1]
+            if cell.value
+        }
+
+        if error_report is not None and not error_report.empty:
+            for _, error in error_report.iterrows():
+                export_column = field_map.get(str(error.get("field", "")))
+                excel_column = column_positions.get(export_column)
+                if not excel_column:
+                    continue
+
+                try:
+                    excel_row = int(error.get("row_index", 0)) + 1
+                except (TypeError, ValueError):
+                    continue
+
+                if excel_row > 1 and excel_row <= worksheet.max_row:
+                    worksheet.cell(row=excel_row, column=excel_column).fill = yellow_fill
+
+    output.seek(0)
+    return output.getvalue()
 
 # -------------------------
 # Policy metadata helpers
@@ -452,28 +556,146 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
 
     return invoice_no, total_members, first_member, full_text
 
+
+# -------------------------
+# CSV formatter
+# -------------------------
+def run_csv_formatter():
+    st.header("📄 Format Portal File")
+    st.button("⬅️ Back to Home", on_click=go_home)
+
+    uploaded_file = st.file_uploader(
+        "Upload Excel File",
+        type=["xlsx", "xls"]
+    )
+
+    pin_master_file = st.file_uploader(
+        "Upload PIN Master (Optional)",
+        type=["xlsx"]
+    )
+
+    portal_type = st.selectbox(
+        "Select Portal Type",
+        ["Dolphin portal", "Global portal"]
+    )
+
+    st.subheader("Global Defaults (Optional)")
+
+    global_start_date = st.text_input("Global Start Date (DD/MM/YYYY)")
+    global_end_date = st.text_input("Global End Date (DD/MM/YYYY)")
+    global_address = st.text_area("Global Address")
+    global_cr = st.text_input("CR Reference Number")
+    include_source_sheet = st.checkbox("Include sheet name column", value=False)
+
+    if uploaded_file:
+        if st.button("Process File"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                tmp.write(uploaded_file.read())
+                input_path = tmp.name
+
+            pin_master_path = None
+            if pin_master_file:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_pin:
+                    tmp_pin.write(pin_master_file.read())
+                    pin_master_path = tmp_pin.name
+            else:
+                default_pin_master = Path(__file__).with_name("pin_master.xlsx")
+                if default_pin_master.exists():
+                    pin_master_path = str(default_pin_master)
+
+            portal_key = {
+                "Dolphin portal": "new",
+                "Global portal": "old",
+            }[portal_type]
+
+            final_export, error_report = process_file(
+                input_path,
+                pin_master_path=pin_master_path,
+                portal_type=portal_key,
+                global_start_date=global_start_date or None,
+                global_end_date=global_end_date or None,
+                global_address=global_address or None,
+                global_cr=global_cr or None,
+                include_source_sheet=include_source_sheet,
+            )
+
+            st.session_state["csv_formatter_result"] = {
+                "final_export": final_export,
+                "error_report": error_report,
+                "portal_key": portal_key,
+                "portal_type": portal_type,
+            }
+
+    result = st.session_state.get("csv_formatter_result")
+    if result:
+        final_export = result["final_export"]
+        error_report = result["error_report"]
+        portal_key = result["portal_key"]
+
+        st.success("Processing Complete")
+
+        st.subheader("Preview")
+        st.dataframe(final_export.head(), use_container_width=True)
+
+        base_name = st.text_input(
+            "Output file name",
+            value="dolphin_portal_output" if portal_key == "new" else "global_portal_output",
+            help="Enter the name before clicking download.",
+        )
+
+        highlighted_xlsx = build_highlighted_excel(final_export, error_report, portal_key)
+
+        if portal_key == "new":
+            st.download_button(
+                "Download Dolphin Portal XLSX",
+                highlighted_xlsx,
+                file_name=clean_download_name(base_name, "xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.download_button(
+                "Download Global Portal XLSX",
+                highlighted_xlsx,
+                file_name=clean_download_name(base_name, "xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            st.download_button(
+                "Download Global Portal CSV",
+                final_export.to_csv(index=False),
+                file_name=clean_download_name(base_name, "csv"),
+                mime="text/csv",
+            )
+
+        st.download_button(
+            "Download Error Report",
+            error_report.to_csv(index=False),
+            file_name="error_report.csv",
+            mime="text/csv",
+        )
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
+
 # -------------------------
 # Home page
 # -------------------------
 if st.session_state["page"] == "home":
-    col1, col2, _ = st.columns([1, 1, 0.3])
+    col1, col2, col3 = st.columns(3)
+
     with col1:
-        if st.button("🪓 Split PDF", key="split_home", on_click=go_split):
-            pass
-        st.write("")
-        st.markdown(
-            "<div class='muted'>Split a combined PDF into individual policy PDFs or invoices.<br>Duplicate names are handled automatically.</div>",
-            unsafe_allow_html=True
-        )
+        st.button("🪓 Split PDF", use_container_width=True, on_click=go_split)
+
+        st.caption("Split a combined PDF into individual policy PDFs or invoices.")
 
     with col2:
-        if st.button("🔗 Merge PDF", key="merge_home", on_click=go_merge):
-            pass
-        st.write("")
-        st.markdown(
-            "<div class='muted'>Upload multiple PDFs and merge them into a single file.</div>",
-            unsafe_allow_html=True
-        )
+        st.button("📎 Merge PDF", use_container_width=True, on_click=go_merge)
+
+        st.caption("Upload multiple PDFs and merge them into a single file.")
+
+    with col3:
+        st.button("📄 Format CSV", use_container_width=True, on_click=go_csv)
+
+        st.caption("Format Excel data into portal-ready CSV files.")
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("<div class='muted'>Choose a tool to get started.</div>", unsafe_allow_html=True)
@@ -945,3 +1167,6 @@ if st.session_state["page"] == "merge":
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
+
+if st.session_state["page"] == "csv":
+    run_csv_formatter()
