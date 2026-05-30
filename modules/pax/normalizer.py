@@ -253,4 +253,19 @@ def normalize_dataframe(df):
             )
         )
 
+    if "address_line_1" in df.columns and "pincode" in df.columns:
+        df["address_line_1"] = df.apply(remove_pincode_from_address, axis=1)
+
     return df
+
+def remove_pincode_from_address(row):
+
+    address = str(row.get("address_line_1", "")).strip()
+    pincode = str(row.get("pincode", "")).strip()
+
+    if pincode:
+        address = address.replace(pincode, "")
+
+    address = " ".join(address.split())
+
+    return address

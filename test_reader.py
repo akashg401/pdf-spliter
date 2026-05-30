@@ -35,4 +35,5 @@ print(
         ]
     ].head()
 )
+print(normalized[["address_line_1", "pincode"]].head())
 

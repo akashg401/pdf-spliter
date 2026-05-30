@@ -1,6 +1,6 @@
 from modules.pax.reader import read_excel_file
 from modules.pax.header_mapper import map_headers
-from modules.pax.normalizer import normalize_address, normalize_dataframe, normalize_date
+from modules.pax.normalizer import normalize_address, normalize_dataframe, normalize_date, remove_pincode_from_address
 from modules.pax.validators import generate_error_report
 from modules.pax.global_defaults import apply_global_defaults
 from modules.pax.exporter import export_old_portal, export_new_portal
@@ -222,6 +222,11 @@ def process_file(
         # 5. Extract PIN from address
         normalized["pincode"] = normalized.apply(
             extract_pincode_from_address,
+            axis=1
+        )
+
+        normalized["address_line_1"] = normalized.apply(
+            remove_pincode_from_address,
             axis=1
         )
 

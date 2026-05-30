@@ -25,7 +25,7 @@ class PinLookup:
             "city": "city",
             "country": "country",
         }
-
+    
         # Validate required columns
         for source_col in required_cols.keys():
             if source_col not in df.columns:
