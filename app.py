@@ -563,6 +563,7 @@ def extract_invoice_metadata(pdf, start_idx: int, end_idx: int) -> Tuple[str, in
 # -------------------------
 # CSV formatter
 # -------------------------
+
 def run_csv_formatter():
     st.header("📄 Format Portal File")
     st.button("⬅️ Back to Home", on_click=go_home)
@@ -1175,6 +1176,12 @@ if st.session_state["page"] == "merge":
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
+
+# CSV page
+
+if st.session_state["page"] == "csv":
+
+    run_csv_formatter()
 
 # -------------------------
 # Policy Downloader page
