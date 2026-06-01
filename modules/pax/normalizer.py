@@ -1,4 +1,5 @@
 import re
+from unicodedata import name
 import pandas as pd
 from datetime import datetime
 
@@ -89,16 +90,42 @@ def normalize_nominee(name, relation):
     return name, relation
 
 
-def normalize_address(value):
+def normalize_address(
+    value,
+    city="",
+    district="",
+    state="",
+    country=""
+):
+
     value = clean_text(value).upper()
 
     for word in ADDRESS_REMOVE_WORDS:
         value = value.replace(word, "")
 
+    value = re.sub(r"[:;,]+", " ", value)
+
+    for item in [
+        city,
+        district,
+        state,
+        country
+    ]:
+
+        item = str(item).strip().upper()
+
+        if item:
+
+            value = re.sub(
+                rf"\b{re.escape(item)}\b",
+                "",
+                value,
+                flags=re.IGNORECASE
+            )
+
     value = re.sub(r"\s+", " ", value)
 
     return value.strip()
-
 
 # ---------------------------------------------------
 # Date Normalization
@@ -177,6 +204,7 @@ def normalize_date(value):
 # Full Name Merge
 # ---------------------------------------------------
 def normalize_full_name(row):
+
     given = clean_text(row.get("given_name", ""))
     surname = clean_text(row.get("surname", ""))
     existing_name = clean_text(row.get("full_name", ""))
@@ -192,12 +220,24 @@ def normalize_full_name(row):
 
     name = name.upper()
 
-    name = re.sub(r"\b(MR|MRS|MS|MISS|MASTER|INF)\.?\b", "", name)
+    # Extract gender BEFORE removing title
+    if not str(row.get("gender", "")).strip():
+
+        if re.search(r"\b(MR|MASTER)\b", name):
+            row["gender"] = "MALE"
+
+        elif re.search(r"\b(MRS|MS|MISS)\b", name):
+            row["gender"] = "FEMALE"
+
+    name = re.sub(
+        r"\b(MR|MRS|MS|MISS|MASTER|INF)\.?\b",
+        "",
+        name
+    )
 
     name = re.sub(r"\s+", " ", name).strip()
 
     return name
-
 
 # ---------------------------------------------------
 # DataFrame Normalization
@@ -205,44 +245,130 @@ def normalize_full_name(row):
 def normalize_dataframe(df):
     df = df.copy()
 
-    if "given_name" in df.columns or "surname" in df.columns or "full_name" in df.columns:
-        df["full_name"] = df.apply(normalize_full_name, axis=1)
+    # -----------------------------
+    # Full Name + Gender Extraction
+    # -----------------------------
+    if (
+        "given_name" in df.columns
+        or "surname" in df.columns
+        or "full_name" in df.columns
+    ):
 
+        if "full_name" in df.columns:
+
+            if "gender" not in df.columns:
+                df["gender"] = ""
+
+            full_name_upper = (
+                df["full_name"]
+                .fillna("")
+                .astype(str)
+                .str.upper()
+                .str.strip()
+            )
+
+            df.loc[
+                full_name_upper.str.startswith(
+                    ("MR ", "MASTER ")
+                ),
+                "gender"
+            ] = "MALE"
+
+            df.loc[
+                full_name_upper.str.startswith(
+                    ("MRS ", "MS ", "MISS ")
+                ),
+                "gender"
+            ] = "FEMALE"
+
+        df["full_name"] = df.apply(
+            normalize_full_name,
+            axis=1
+        )
+
+    # -----------------------------
+    # Passport
+    # -----------------------------
     if "passport_number" in df.columns:
-        df["passport_number"] = df["passport_number"].apply(normalize_passport)
+        df["passport_number"] = df["passport_number"].apply(
+            normalize_passport
+        )
 
+    # -----------------------------
+    # Mobile
+    # -----------------------------
     if "mobile_number" in df.columns:
-        df["mobile_number"] = df["mobile_number"].apply(normalize_mobile)
+        df["mobile_number"] = df["mobile_number"].apply(
+            normalize_mobile
+        )
 
     if "phone_number" in df.columns:
-        df["phone_number"] = df["phone_number"].apply(normalize_phone)
+        df["phone_number"] = df["phone_number"].apply(
+            normalize_phone
+        )
 
-    if "mobile_number" in df.columns and "phone_number" in df.columns:
+    if (
+        "mobile_number" in df.columns
+        and "phone_number" in df.columns
+    ):
         df.loc[
-            (df["mobile_number"] == DEFAULT_VALUES["mobile_number"])
+            (
+                df["mobile_number"]
+                == DEFAULT_VALUES["mobile_number"]
+            )
             & (df["phone_number"] != ""),
             "mobile_number",
         ] = df["phone_number"]
 
+    # -----------------------------
+    # Email
+    # -----------------------------
     if "email" in df.columns:
-        df["email"] = df["email"].apply(normalize_email)
+        df["email"] = df["email"].apply(
+            normalize_email
+        )
 
+    # -----------------------------
+    # Gender
+    # -----------------------------
     if "gender" in df.columns:
-        df["gender"] = df["gender"].apply(normalize_gender)
+        df["gender"] = df["gender"].apply(
+            normalize_gender
+        )
 
+    # -----------------------------
+    # Address
+    # -----------------------------
     if "address_line_1" in df.columns:
-        df["address_line_1"] = df["address_line_1"].apply(normalize_address)
+        df["address_line_1"] = df["address_line_1"].apply(
+            normalize_address
+        )
 
+    # -----------------------------
+    # Dates
+    # -----------------------------
     if "start_date" in df.columns:
-        df["start_date"] = df["start_date"].apply(normalize_date)
+        df["start_date"] = df["start_date"].apply(
+            normalize_date
+        )
 
     if "end_date" in df.columns:
-        df["end_date"] = df["end_date"].apply(normalize_date)
+        df["end_date"] = df["end_date"].apply(
+            normalize_date
+        )
 
     if "dob" in df.columns:
-        df["dob"] = df["dob"].apply(normalize_date)
+        df["dob"] = df["dob"].apply(
+            normalize_date
+        )
 
-    if "nominee" in df.columns and "nominee_relation" in df.columns:
+    # -----------------------------
+    # Nominee
+    # -----------------------------
+    if (
+        "nominee" in df.columns
+        and "nominee_relation" in df.columns
+    ):
         df["nominee"], df["nominee_relation"] = zip(
             *df.apply(
                 lambda row: normalize_nominee(
@@ -253,19 +379,86 @@ def normalize_dataframe(df):
             )
         )
 
-    if "address_line_1" in df.columns and "pincode" in df.columns:
-        df["address_line_1"] = df.apply(remove_pincode_from_address, axis=1)
+    # -----------------------------
+    # Remove PIN from Address
+    # -----------------------------
+    if (
+        "address_line_1" in df.columns
+        and "pincode" in df.columns
+    ):
+        df["address_line_1"] = df.apply(
+            remove_pincode_from_address,
+            axis=1
+        )
+
+    print(df[["full_name", "gender"]].head())
 
     return df
 
 def remove_pincode_from_address(row):
 
-    address = str(row.get("address_line_1", "")).strip()
-    pincode = str(row.get("pincode", "")).strip()
+    address = str(
+        row.get("address_line_1", "")
+    ).upper().strip()
+
+    pincode = str(
+        row.get("pincode", "")
+    ).strip()
+
+    city = str(
+        row.get("city", "")
+    ).upper().strip()
+
+    district = str(
+        row.get("district", "")
+    ).upper().strip()
+
+    state = str(
+        row.get("state", "")
+    ).upper().strip()
+
+    country = str(
+        row.get("country", "")
+    ).upper().strip()
 
     if pincode:
-        address = address.replace(pincode, "")
+        address = re.sub(
+            rf"\b{re.escape(pincode)}\b",
+            "",
+            address
+        )
 
-    address = " ".join(address.split())
+    for value in {
+        city,
+        district,
+        state,
+        country,
+        "INDIA",
+        "INDIAN"
+    }:
 
-    return address
+        if value:
+
+            address = re.sub(
+                rf"\b{re.escape(value)}\b",
+                "",
+                address,
+                flags=re.IGNORECASE
+            )
+
+    address = re.sub(
+        r"[:;,/\-]+",
+        " ",
+        address
+    )
+
+    address = re.sub(
+        r"\s+",
+        " ",
+        address
+    )
+
+    return address.strip()
+
+import re
+

@@ -70,6 +70,10 @@ ADDRESS_REMOVE_WORDS = [
 ]
 
 HEADER_MAPPING = {
+    "name as per the passport": "full_name",
+    "name as per passport": "full_name",
+    "insured name": "full_name",
+    "traveller name": "full_name",
     "full name": "full_name",
     "first name": "given_name",
     "last name": "surname",

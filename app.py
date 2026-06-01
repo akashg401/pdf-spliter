@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Tuple, Dict, List
 from modules.pax.pipeline import process_file
 from openpyxl.styles import PatternFill
+from datetime import date
 
 # -------------------------
 # Page config + CSS
@@ -585,8 +586,10 @@ def run_csv_formatter():
 
     st.subheader("Global Defaults (Optional)")
 
-    global_start_date = st.text_input("Global Start Date (DD/MM/YYYY)")
-    global_end_date = st.text_input("Global End Date (DD/MM/YYYY)")
+    global_start_date = st.date_input("Global Start Date",value=date.today(),format="DD/MM/YYYY")
+
+    global_end_date = st.date_input("Global End Date",value=global_start_date,min_value=global_start_date,format="DD/MM/YYYY")
+
     global_address = st.text_area("Global Address")
     global_cr = st.text_input("CR Reference Number")
     include_source_sheet = st.checkbox("Include sheet name column", value=False)
@@ -616,8 +619,8 @@ def run_csv_formatter():
                 input_path,
                 pin_master_path=pin_master_path,
                 portal_type=portal_key,
-                global_start_date=global_start_date or None,
-                global_end_date=global_end_date or None,
+                global_start_date=global_start_date.strftime("%d/%m/%Y"),
+                global_end_date=global_end_date.strftime("%d/%m/%Y"),
                 global_address=global_address or None,
                 global_cr=global_cr or None,
                 include_source_sheet=include_source_sheet,

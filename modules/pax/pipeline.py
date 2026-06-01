@@ -88,6 +88,8 @@ def clean_address_after_lookup(row):
         address = re.sub(rf"\b{re.escape(pincode)}\b", "", address)
 
     values_to_remove = {
+        str(row.get("city", "") or "").strip().upper(),
+        str(row.get("district", "") or "").strip().upper(),
         str(row.get("state", "") or "").strip().upper(),
         str(row.get("country", "") or "").strip().upper(),
         "INDIA",
@@ -99,6 +101,8 @@ def clean_address_after_lookup(row):
         value = str(value or "").strip().upper()
         if value:
             address = re.sub(rf"\b{re.escape(value)}\b", "", address)
+    
+    address = re.sub(r"[:;,/\-]+", " ", address)
 
     address = re.sub(r"\s+", " ", address)
     return address.strip()
@@ -139,30 +143,38 @@ def split_date_range(df):
 # ---------------------------------------------------
 # Helper: Gender inference fallback
 # ---------------------------------------------------
-def infer_gender_from_name(row):
-    gender = str(row.get("gender", "")).upper().strip()
-    name = str(row.get("full_name", "")).upper().strip()
 
-    # If already valid gender, keep it
-    if gender in ["MALE", "FEMALE"]:
+def infer_gender_from_name(row):
+
+    gender = str(
+        row.get("gender", "")
+    ).upper().strip()
+
+    if gender :
         return gender
 
-    # Title-based inference
-    if " MR" in name or name.endswith(" MR"):
+    raw_name = " ".join([
+        str(row.get("given_name", "")),
+        str(row.get("surname", "")),
+        str(row.get("full_name", ""))
+    ]).upper()
+
+    if raw_name.startswith("MR "):
         return "MALE"
 
-    if " MRS" in name or " MS" in name:
-        return "FEMALE"
-
-    # Infant cases
-    if " INF" in name and " F" in name:
-        return "FEMALE"
-
-    if " INF" in name and " M" in name:
+    if raw_name.startswith("MASTER "):
         return "MALE"
+
+    if raw_name.startswith("MRS "):
+        return "FEMALE"
+
+    if raw_name.startswith("MS "):
+        return "FEMALE"
+
+    if raw_name.startswith("MISS "):
+        return "FEMALE"
 
     return ""
-
 
 # ---------------------------------------------------
 # MAIN PIPELINE CONTROLLER
@@ -201,6 +213,10 @@ def process_file(
 
         # 1. Header mapping
         mapped = map_headers(sheet["sheet_name"], sheet["data"])
+        print(mapped.head(3))
+
+        print(mapped[["full_name"]].head())
+        print(mapped.columns.tolist())
 
         # 2. Normalize
         normalized = normalize_dataframe(mapped)
@@ -225,10 +241,7 @@ def process_file(
             axis=1
         )
 
-        normalized["address_line_1"] = normalized.apply(
-            remove_pincode_from_address,
-            axis=1
-        )
+        
 
         # 6. PIN → LOCATION Lookup
         if pin_lookup:
@@ -255,6 +268,18 @@ def process_file(
                 apply_location_lookup,
                 axis=1
             )
+                # Address cleanup AFTER lookup
+            normalized["address_line_1"] = normalized.apply(
+            remove_pincode_from_address,
+            axis=1
+            )
+
+
+        print(
+            normalized[
+                ["full_name", "gender"]
+            ].head(10)
+        )
 
         # 7. Gender inference fallback
         normalized["gender"] = normalized.apply(

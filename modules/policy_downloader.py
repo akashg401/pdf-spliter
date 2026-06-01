@@ -225,7 +225,14 @@ def download_policy_pdfs(link_df, progress_callback=None):
                 0
             )
 
-    zip_path = base_dir / f"{folder_name}.zip"
+    if len(link_df) == 1:
+        zip_name = f"{folder_name}.zip"
+    else:
+        zip_name = (
+            f"{folder_name} x {len(link_df)}.zip"
+        )
+
+    zip_path = base_dir / zip_name
 
     with zipfile.ZipFile(
         zip_path,
