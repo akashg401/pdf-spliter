@@ -213,10 +213,7 @@ def process_file(
 
         # 1. Header mapping
         mapped = map_headers(sheet["sheet_name"], sheet["data"])
-        print(mapped.head(3))
-
-        print(mapped[["full_name"]].head())
-        print(mapped.columns.tolist())
+        
 
         # 2. Normalize
         normalized = normalize_dataframe(mapped)
@@ -275,11 +272,7 @@ def process_file(
             )
 
 
-        print(
-            normalized[
-                ["full_name", "gender"]
-            ].head(10)
-        )
+        
 
         # 7. Gender inference fallback
         normalized["gender"] = normalized.apply(
