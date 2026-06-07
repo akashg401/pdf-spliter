@@ -5,7 +5,41 @@ from modules.pax.config import CANONICAL_COLUMNS, HEADER_MAPPING
 def normalize_header(header):
     if pd.isna(header):
         return ""
-    return str(header).strip().lower()
+    value = str(header).strip().lower()
+    value = value.replace("*", "")
+    value = value.replace(".", " ")
+    value = value.replace("_", " ")
+    value = value.replace("-", " ")
+    value = " ".join(value.split())
+    return value
+
+
+NORMALIZED_HEADER_MAPPING = {
+    normalize_header(key): value
+    for key, value in HEADER_MAPPING.items()
+}
+
+
+SAFE_CONTAINS_KEYS = [
+    key
+    for key in sorted(NORMALIZED_HEADER_MAPPING.keys(), key=len, reverse=True)
+    if key not in {"name", "passport", "pin", "state", "country", "contact", "phone", "email"}
+]
+
+
+def match_header(header):
+    normalized = normalize_header(header)
+    if not normalized:
+        return None
+
+    if normalized in NORMALIZED_HEADER_MAPPING:
+        return NORMALIZED_HEADER_MAPPING[normalized]
+
+    for key in SAFE_CONTAINS_KEYS:
+        if key and key in normalized:
+            return NORMALIZED_HEADER_MAPPING[key]
+
+    return None
 
 
 def headers_look_valid(df):
@@ -15,11 +49,8 @@ def headers_look_valid(df):
     score = 0
 
     for col in df.columns:
-        col_str = normalize_header(col)
-        for key in HEADER_MAPPING.keys():
-            if key in col_str:
-                score += 1
-                break
+        if match_header(col):
+            score += 1
 
     return score >= 2  # threshold
 
@@ -38,11 +69,8 @@ def map_headers(sheet_name, df):
             score = 0
 
             for value in row:
-                value_str = normalize_header(value)
-                for key in HEADER_MAPPING.keys():
-                    if key in value_str:
-                        score += 1
-                        break
+                if match_header(value):
+                    score += 1
 
             if score >= 2:
                 df.columns = df.iloc[i]
@@ -52,16 +80,7 @@ def map_headers(sheet_name, df):
     mapped_df = pd.DataFrame()
 
     for col in df.columns:
-        normalized = normalize_header(col)
-
-        matched_column = None
-
-        # Match longer keys first
-        for key in sorted(HEADER_MAPPING.keys(), key=len, reverse=True):
-            if key in normalized:
-                matched_column = HEADER_MAPPING[key]
-                break
-
+        matched_column = match_header(col)
 
         if matched_column:
             if matched_column in mapped_df.columns:

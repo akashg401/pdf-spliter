@@ -36,22 +36,21 @@ def get_policy_summary(df):
             charge_col = col
             break
 
-    total_charges = 0
+    if not charge_col:
+        return total_policies, 0
 
-    if charge_col:
-
-        charges = (
-            df[charge_col]
-            .astype(str)
-            .str.replace("₹", "", regex=False)
-            .str.replace(",", "", regex=False)
-            .str.strip()
+    charges = (
+        df[charge_col]
+        .fillna("")
+        .astype(str)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+        .str.strip()
     )
 
-    total_charges = pd.to_numeric(
+    total_charges = float(pd.to_numeric(
         charges,
         errors="coerce"
-    ).fillna(0).sum()
+    ).fillna(0).sum())
 
     return total_policies, total_charges
 

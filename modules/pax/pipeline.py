@@ -1,6 +1,6 @@
 from modules.pax.reader import read_excel_file
 from modules.pax.header_mapper import map_headers
-from modules.pax.normalizer import normalize_address, normalize_dataframe, normalize_date, remove_pincode_from_address
+from modules.pax.normalizer import normalize_address, normalize_dataframe, normalize_date
 from modules.pax.validators import generate_error_report
 from modules.pax.global_defaults import apply_global_defaults
 from modules.pax.exporter import export_old_portal, export_new_portal
@@ -265,10 +265,10 @@ def process_file(
                 apply_location_lookup,
                 axis=1
             )
-                # Address cleanup AFTER lookup
+            # Address cleanup AFTER lookup
             normalized["address_line_1"] = normalized.apply(
-            remove_pincode_from_address,
-            axis=1
+                clean_address_after_lookup,
+                axis=1,
             )
 
 

@@ -1,5 +1,4 @@
 import re
-from unicodedata import name
 import pandas as pd
 from datetime import datetime
 
@@ -33,19 +32,31 @@ def normalize_passport(value):
 
 def normalize_mobile(value):
     value = clean_text(value)
-    value = value.replace("+91", "")
-    value = re.sub(r"\D", "", value)
+    digits = re.sub(r"\D", "", value)
 
-    if not value:
+    if not digits:
         return DEFAULT_VALUES["mobile_number"]
+
+    if len(digits) == 12 and digits.startswith("91"):
+        return digits[2:]
+
+    if len(digits) == 10:
+        return digits
 
     return value
 
 
 def normalize_phone(value):
     value = clean_text(value)
-    value = value.replace("+91", "")
-    return re.sub(r"\D", "", value)
+    digits = re.sub(r"\D", "", value)
+
+    if len(digits) == 12 and digits.startswith("91"):
+        return digits[2:]
+
+    if len(digits) == 10:
+        return digits
+
+    return value
 
 
 def normalize_email(value):
@@ -72,6 +83,15 @@ def normalize_gender(value):
         if key in value:
             return gender
 
+    return ""
+
+
+def infer_gender_from_title_text(value):
+    value = clean_text(value).upper()
+    if re.search(r"\b(MR|MASTER)\.?\b", value):
+        return "MALE"
+    if re.search(r"\b(MRS|MS|MISS)\.?\b", value):
+        return "FEMALE"
     return ""
 
 
@@ -220,15 +240,6 @@ def normalize_full_name(row):
 
     name = name.upper()
 
-    # Extract gender BEFORE removing title
-    if not str(row.get("gender", "")).strip():
-
-        if re.search(r"\b(MR|MASTER)\b", name):
-            row["gender"] = "MALE"
-
-        elif re.search(r"\b(MRS|MS|MISS)\b", name):
-            row["gender"] = "FEMALE"
-
     name = re.sub(
         r"\b(MR|MRS|MS|MISS|MASTER|INF)\.?\b",
         "",
@@ -245,6 +256,11 @@ def normalize_full_name(row):
 def normalize_dataframe(df):
     df = df.copy()
 
+    def text_series(column):
+        if column in df.columns:
+            return df[column].fillna("").astype(str)
+        return pd.Series([""] * len(df), index=df.index)
+
     # -----------------------------
     # Full Name + Gender Extraction
     # -----------------------------
@@ -253,33 +269,23 @@ def normalize_dataframe(df):
         or "surname" in df.columns
         or "full_name" in df.columns
     ):
+        if "gender" not in df.columns:
+            df["gender"] = ""
 
-        if "full_name" in df.columns:
-
-            if "gender" not in df.columns:
-                df["gender"] = ""
-
-            full_name_upper = (
-                df["full_name"]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-                .str.strip()
-            )
-
-            df.loc[
-                full_name_upper.str.startswith(
-                    ("MR ", "MASTER ")
-                ),
-                "gender"
-            ] = "MALE"
-
-            df.loc[
-                full_name_upper.str.startswith(
-                    ("MRS ", "MS ", "MISS ")
-                ),
-                "gender"
-            ] = "FEMALE"
+        title_source = (
+            text_series("full_name")
+            + " "
+            + text_series("given_name")
+            + " "
+            + text_series("surname")
+        )
+        current_gender = df["gender"].fillna("").astype(str).str.strip()
+        inferred_gender = title_source.apply(infer_gender_from_title_text)
+        df.loc[
+            (current_gender == "")
+            & (inferred_gender != ""),
+            "gender",
+        ] = inferred_gender
 
         df["full_name"] = df.apply(
             normalize_full_name,
@@ -391,7 +397,7 @@ def normalize_dataframe(df):
             axis=1
         )
 
-    print(df[["full_name", "gender"]].head())
+    
 
     return df
 

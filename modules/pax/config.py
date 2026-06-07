@@ -74,6 +74,7 @@ HEADER_MAPPING = {
     "name as per passport": "full_name",
     "insured name": "full_name",
     "traveller name": "full_name",
+    "traveler name": "full_name",
     "full name": "full_name",
     "first name": "given_name",
     "last name": "surname",
