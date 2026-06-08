@@ -584,6 +584,23 @@ def run_csv_formatter():
         ["Dolphin portal", "Global portal"]
     )
 
+    st.subheader("Batch Splitter")
+
+    split_batches = st.checkbox(
+    "Split Into Batches",
+    value=False
+    )
+
+    batch_size = 150
+
+    if split_batches:
+        batch_size = st.number_input(
+            "Batch Size",
+            min_value=1,
+            value=150,
+            step=1
+        )
+
     st.subheader("Global Defaults (Optional)")
 
     global_start_date = st.date_input("Global Start Date",value=date.today(),format="DD/MM/YYYY")
@@ -626,11 +643,45 @@ def run_csv_formatter():
                 include_source_sheet=include_source_sheet,
             )
 
+            batch_files = []
+            batch_summary = []
+
+            if split_batches:
+
+                total_rows = len(final_export)
+
+                for idx, start in enumerate(
+                    range(0, total_rows, batch_size),
+                    start=1
+                ):
+
+                    batch_df = final_export.iloc[
+                        start:start + batch_size
+                    ]
+
+                    batch_files.append(
+                        {       
+                            "name": f"Batch_{idx}_{len(batch_df)}_PAX.xlsx",
+                            "data": batch_df.copy()
+                        }
+                    )
+
+                    batch_summary.append(
+                        {
+                            "batch": idx,
+                            "records": len(batch_df)
+                        }
+                    )
+
             st.session_state["csv_formatter_result"] = {
                 "final_export": final_export,
                 "error_report": error_report,
                 "portal_key": portal_key,
                 "portal_type": portal_type,
+                "batch_files": batch_files,
+                "batch_summary": batch_summary,
+                "split_batches": split_batches,
+                "batch_size": batch_size,
             }
 
     result = st.session_state.get("csv_formatter_result")
@@ -639,7 +690,34 @@ def run_csv_formatter():
         error_report = result["error_report"]
         portal_key = result["portal_key"]
 
+        batch_files = result.get("batch_files",[])
+
+        batch_summary = result.get( "batch_summary", [])
+
+        split_batches = result.get( "split_batches", False)
+
+        batch_size = result.get( "batch_size", 150)
+
         st.success("Processing Complete")
+
+        if split_batches:
+            st.subheader("Batch Summary")
+
+            st.write(
+                f"Total Records: {len(final_export)}"
+            )
+
+            st.write(
+                f"Batch Size: {batch_size}"
+            )
+
+            st.write(
+                f"Total Batches: {len(batch_summary)}"
+            )
+
+            for batch in batch_summary:
+
+                st.write(f"Batch_{batch['batch']}_{batch['records']}_PAX.xlsx")
 
         st.subheader("Preview")
         st.dataframe(final_export.head(), use_container_width=True)
@@ -679,6 +757,28 @@ def run_csv_formatter():
             file_name="error_report.csv",
             mime="text/csv",
         )
+
+        if split_batches:
+            st.subheader("Batch Downloads")
+
+            for batch in batch_files:
+                output = io.BytesIO()
+
+                with pd.ExcelWriter(
+                    output,
+                    engine="openpyxl"
+                ) as writer:
+                    batch["data"].to_excel(
+                        writer,
+                        index=False
+                    )
+
+                st.download_button(
+                    label=batch["name"],
+                    data=output.getvalue(),
+                    file_name=batch["name"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
