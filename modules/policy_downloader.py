@@ -1,3 +1,5 @@
+from fileinput import filename
+
 import pandas as pd
 from openpyxl import load_workbook
 import requests
@@ -72,6 +74,17 @@ def read_policy_links(uploaded_file):
 
     records = []
 
+    hub_column = None
+
+    for header in headers:
+        if str(header).strip().lower() in [
+            "hub",
+            "hub name",
+            "hub_name"
+        ]:
+            hub_column = header
+            break
+
     for row in range(2, ws.max_row + 1):
 
         policy_no = ws.cell(
@@ -83,6 +96,14 @@ def read_policy_links(uploaded_file):
             row,
             headers["Traveller Name"]
         ).value
+
+        hub_name = ""
+
+        if hub_column:
+            hub_name = ws.cell(
+                row,
+                headers[hub_column]
+            ).value
 
         link_cell = ws.cell(
             row,
@@ -97,7 +118,8 @@ def read_policy_links(uploaded_file):
         records.append({
             "policy_number": policy_no,
             "traveller_name": traveller,
-            "url": url
+            "url": url,
+            "hub_name": hub_name
         })
 
     return pd.DataFrame(records)
@@ -113,7 +135,11 @@ def clean_filename(text):
 
     return text.strip()
 
-def download_policy_pdfs(link_df, progress_callback=None):
+def download_policy_pdfs(
+    link_df,
+    progress_callback=None,
+    hub_wise=False
+    ):
 
     base_dir = Path(
         tempfile.mkdtemp()
@@ -143,6 +169,20 @@ def download_policy_pdfs(link_df, progress_callback=None):
 
     start_time = time.time()
     total = len(link_df)
+
+    hub_counts = {}
+
+    if hub_wise:
+        for hub in link_df["hub_name"].fillna(""):
+
+            hub = str(hub).strip()
+
+            if not hub:
+                hub = "Unknown Hub"
+
+            hub_counts[hub] = (
+                hub_counts.get(hub, 0) + 1
+            )
 
     for idx, (_, row) in enumerate(
         link_df.iterrows(),
@@ -185,7 +225,34 @@ def download_policy_pdfs(link_df, progress_callback=None):
             + ".pdf"
         )
 
-        filepath = temp_dir / filename
+        if hub_wise:
+
+            hub_name = str(
+                row.get("hub_name", "")
+            ).strip()
+
+            if not hub_name:
+                hub_name = "Unknown Hub"
+
+            folder_display_name = (
+                f"{hub_name}_{hub_counts[hub_name]}_Policies"
+            )
+
+            hub_folder = (
+                temp_dir /
+                clean_filename(folder_display_name)
+            )
+
+            hub_folder.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+
+            filepath = hub_folder / filename
+
+        else:
+
+            filepath = temp_dir / filename
 
         try:
 
@@ -239,11 +306,13 @@ def download_policy_pdfs(link_df, progress_callback=None):
         zipfile.ZIP_DEFLATED
     ) as zipf:
 
-        for pdf_file in temp_dir.glob("*.pdf"):
+        for pdf_file in temp_dir.rglob("*.pdf"):
 
             zipf.write(
                 pdf_file,
-                arcname=f"{folder_name}/{pdf_file.name}"
+                arcname=str(
+                    pdf_file.relative_to(base_dir)
+                )
             )
 
     total_time = time.time() - start_time

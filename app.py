@@ -1486,6 +1486,16 @@ if st.session_state["page"] == "policy":
         type=["xlsx"]
     )
 
+    hub_wise_download = st.checkbox(
+        "Create Hub-wise Folders",
+        help=(
+            "Reads Hub Name column and "
+            "creates separate folders."
+        )
+    )
+
+    
+
     if uploaded_file:
 
         from modules.policy_downloader import (
@@ -1548,7 +1558,8 @@ Elapsed Time: {int(elapsed)} sec
 
         zip_path, ok, fail, total_time = download_policy_pdfs(
             link_df,
-            progress_callback=update_progress
+            progress_callback=update_progress,
+            hub_wise=hub_wise_download
         )
 
         status_box.success(
