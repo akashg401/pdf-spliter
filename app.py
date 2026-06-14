@@ -13,6 +13,14 @@ from typing import Any, Tuple, Dict, List
 from modules.pax.pipeline import process_file
 from openpyxl.styles import PatternFill
 from datetime import date
+from copy import copy
+from openpyxl import load_workbook
+from openpyxl.styles import (
+    PatternFill,
+    Font,
+    Border,
+    Alignment
+)
 
 
 # -------------------------
@@ -156,15 +164,77 @@ def clean_download_name(name: str, extension: str) -> str:
     return f"{cleaned}.{extension}"
 
 
-def build_highlighted_excel(df: pd.DataFrame, error_report: pd.DataFrame, portal_key: str) -> bytes:
-    output = io.BytesIO()
-    sheet_name = "Dolphin Upload" if portal_key == "new" else "Global Upload"
-    field_map = NEW_PORTAL_FIELD_TO_COLUMN if portal_key == "new" else OLD_PORTAL_FIELD_TO_COLUMN
-    yellow_fill = PatternFill(fill_type="solid", fgColor="FFF2CC")
+def build_highlighted_excel(
+    df: pd.DataFrame,
+    error_report: pd.DataFrame,
+    portal_key: str
+) -> bytes:
 
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    output = io.BytesIO()
+
+    # ----------------------------
+    # DOLPHIN PORTAL
+    # ----------------------------
+    if portal_key == "new":
+
+        wb = load_workbook(
+            "GroupPolicySample.xlsx"
+        )
+
+        worksheet = wb.active
+
+        if worksheet.max_row > 1:
+            worksheet.delete_rows(
+                2,
+                worksheet.max_row
+            )
+
+        for row_idx, row in enumerate(
+            df.values.tolist(),
+            start=2
+        ):
+            for col_idx, value in enumerate(
+                row,
+                start=1
+            ):
+                worksheet.cell(
+                    row=row_idx,
+                    column=col_idx,
+                    value=value
+                )
+
+        wb.save(output)
+
+        output.seek(0)
+
+        return output.getvalue()
+
+    # ----------------------------
+    # GLOBAL PORTAL
+    # ----------------------------
+    sheet_name = "Global Upload"
+
+    field_map = OLD_PORTAL_FIELD_TO_COLUMN
+
+    yellow_fill = PatternFill(
+        fill_type="solid",
+        fgColor="FFF2CC"
+    )
+
+    with pd.ExcelWriter(
+        output,
+        engine="openpyxl"
+    ) as writer:
+
+        df.to_excel(
+            writer,
+            index=False,
+            sheet_name=sheet_name
+        )
+
         worksheet = writer.book[sheet_name]
+
+
 
         column_positions = {
             cell.value: cell.column
@@ -172,23 +242,50 @@ def build_highlighted_excel(df: pd.DataFrame, error_report: pd.DataFrame, portal
             if cell.value
         }
 
-        if error_report is not None and not error_report.empty:
+        if (
+            error_report is not None
+            and not error_report.empty
+        ):
+
             for _, error in error_report.iterrows():
-                export_column = field_map.get(str(error.get("field", "")))
-                excel_column = column_positions.get(export_column)
+
+                export_column = field_map.get(
+                    str(error.get("field", ""))
+                )
+
+                excel_column = column_positions.get(
+                    export_column
+                )
+
                 if not excel_column:
                     continue
 
                 try:
-                    excel_row = int(error.get("row_index", 0)) + 1
-                except (TypeError, ValueError):
+                    excel_row = (
+                        int(error.get("row_index", 0))
+                        + 1
+                    )
+                except (
+                    TypeError,
+                    ValueError
+                ):
                     continue
 
-                if excel_row > 1 and excel_row <= worksheet.max_row:
-                    worksheet.cell(row=excel_row, column=excel_column).fill = yellow_fill
+                if (
+                    excel_row > 1
+                    and excel_row <= worksheet.max_row
+                ):
+                    worksheet.cell(
+                        row=excel_row,
+                        column=excel_column
+                    ).fill = yellow_fill
+
+    
 
     output.seek(0)
+
     return output.getvalue()
+    print(df.columns.tolist())
 
 # -------------------------
 # Policy metadata helpers
@@ -640,28 +737,28 @@ def run_csv_formatter():
 
             with st.spinner(
                 "Formatting data and validating records..."
-            ):
+                ):
 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
                     tmp.write(uploaded_file.read())
                     input_path = tmp.name
 
-            pin_master_path = "pin_master.xlsx"
+                pin_master_path = "pin_master.xlsx"
 
-            portal_key = {
+                portal_key = {
                 "Dolphin portal": "new",
                 "Global portal": "old",
-            }[portal_type]
+                }[portal_type]
 
-            from pathlib import Path
+                from pathlib import Path
 
-            original_file_name = (
+                original_file_name = (
                 Path(uploaded_file.name)
                 .stem
                 .replace(" ", "_")
-            )       
+                )       
 
-            final_export, error_report = process_file(
+                final_export, error_report = process_file(
                 input_path,
                 pin_master_path=pin_master_path,
                 portal_type=portal_key,
@@ -670,10 +767,10 @@ def run_csv_formatter():
                 global_address=global_address or None,
                 global_cr=global_cr or None,
                 include_source_sheet=include_source_sheet,
-            )
+                )
 
-            batch_files = []
-            batch_summary = []
+                batch_files = []
+                batch_summary = []
 
             if split_batches:
 
@@ -784,12 +881,7 @@ def run_csv_formatter():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
-            st.download_button(
-                "Download Global Portal XLSX",
-                highlighted_xlsx,
-                file_name=f"{original_file_name}_FORMATTED.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            
             st.download_button(
                 "Download Global Portal CSV",
                 final_export.to_csv(index=False),
@@ -808,26 +900,71 @@ def run_csv_formatter():
             st.subheader("Batch Downloads")
 
             for batch in batch_files:
-                output = io.BytesIO()
 
-                with pd.ExcelWriter(
-                    output,
-                    engine="openpyxl"
-                ) as writer:
-                    batch["data"].to_excel(
-                        writer,
-                        index=False
+                if portal_key == "new":
+
+                    output = io.BytesIO()
+
+                    with pd.ExcelWriter(
+                        output,
+                        engine="openpyxl"
+                    ) as writer:
+
+                        batch["data"].to_excel(
+                            writer,
+                            index=False
+                        )
+
+                        worksheet = writer.book.active
+
+                        header_font = Font(
+                            name="Calibri",
+                            size=11,
+                            bold=True
+                        )
+
+                        normal_font = Font(
+                            name="Calibri",
+                            size=11,
+                            bold=False
+                        )
+
+                        cell_alignment = Alignment(
+                            horizontal="general",
+                            vertical="bottom"
+                        )
+
+                        no_border = Border()
+
+                        for cell in worksheet[1]:
+                            cell.font = header_font
+                            cell.alignment = cell_alignment
+                            cell.border = no_border
+
+                    st.download_button(
+                        label=batch["name"],
+                        data=output.getvalue(),
+                        file_name=batch["name"],
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
-                st.download_button(
-                    label=batch["name"],
-                    data=output.getvalue(),
-                    file_name=batch["name"],
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                else:
 
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
+                    csv_name = batch["name"].replace(
+                        ".xlsx",
+                        ".csv"
+                    )
+
+                    st.download_button(
+                        label=csv_name,
+                        data=batch["data"].to_csv(index=False),
+                        file_name=csv_name,
+                        mime="text/csv"
+                    )
+
+                st.markdown("<hr>", unsafe_allow_html=True)
+
+        st.markdown("<div class='footer'>Made by AG with ❤️</div>", unsafe_allow_html=True)
 
 # -------------------------
 # Home page

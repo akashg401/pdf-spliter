@@ -98,6 +98,10 @@ def export_new_portal(df):
         "emergency_email": "Emergency Email ID",
         "gst_number": "GST Number",
         "gst_state": "GST State",
+        "university_name": "University Name",
+        "university_address": "University Address",
+        "sponsor_name": "Sponsor Name",
+        "sponsor_relationship": "Sponsor Relationship",
     })
 
     # NEW portal rule: no dot placeholders

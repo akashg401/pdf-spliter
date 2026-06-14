@@ -1,6 +1,7 @@
 import re
 import pandas as pd
 from datetime import datetime
+import unicodedata
 
 from modules.pax.config import (
     DEFAULT_VALUES,

@@ -216,4 +216,8 @@ NEW_PORTAL_COLUMNS = [
     "emergency_email",
     "gst_number",
     "gst_state",
+    "university_name",
+    "university_address",
+    "sponsor_name",
+    "sponsor_relationship",
 ]
