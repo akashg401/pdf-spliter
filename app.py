@@ -9,10 +9,11 @@ import math
 import tempfile
 import pandas as pd
 from pathlib import Path
-from typing import Tuple, Dict, List
+from typing import Any, Tuple, Dict, List
 from modules.pax.pipeline import process_file
 from openpyxl.styles import PatternFill
 from datetime import date
+
 
 # -------------------------
 # Page config + CSS
@@ -574,9 +575,24 @@ def run_csv_formatter():
         type=["xlsx", "xls"]
     )
 
-    pin_master_file = st.file_uploader(
-        "Upload PIN Master (Optional)",
-        type=["xlsx"]
+    current_file_name: Any | None = (
+    uploaded_file.name
+    if uploaded_file
+    else None
+    )
+
+    previous_file_name: Any | None = st.session_state.get(
+        "csv_formatter_filename"
+    )
+
+    if current_file_name != previous_file_name:
+        st.session_state.pop(
+            "csv_formatter_result",
+            None
+        )
+
+    st.session_state["csv_formatter_filename"] = (
+        current_file_name
     )
 
     portal_type = st.selectbox(
@@ -609,28 +625,41 @@ def run_csv_formatter():
 
     global_address = st.text_area("Global Address")
     global_cr = st.text_input("CR Reference Number")
-    include_source_sheet = st.checkbox("Include sheet name column", value=False)
+    include_source_sheet = st.checkbox( 
+        "Include Source Sheet Name (Reference Only)", 
+        value=False, 
+        help=( 
+            "Adds SOURCE SHEET NAME column in the " 
+            "formatted output for reference. " 
+            "This column is not intended for portal upload." 
+            ) 
+        )
 
     if uploaded_file:
         if st.button("Process File"):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-                tmp.write(uploaded_file.read())
-                input_path = tmp.name
 
-            pin_master_path = None
-            if pin_master_file:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_pin:
-                    tmp_pin.write(pin_master_file.read())
-                    pin_master_path = tmp_pin.name
-            else:
-                default_pin_master = Path(__file__).with_name("pin_master.xlsx")
-                if default_pin_master.exists():
-                    pin_master_path = str(default_pin_master)
+            with st.spinner(
+                "Formatting data and validating records..."
+            ):
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                    tmp.write(uploaded_file.read())
+                    input_path = tmp.name
+
+            pin_master_path = "pin_master.xlsx"
 
             portal_key = {
                 "Dolphin portal": "new",
                 "Global portal": "old",
             }[portal_type]
+
+            from pathlib import Path
+
+            original_file_name = (
+                Path(uploaded_file.name)
+                .stem
+                .replace(" ", "_")
+            )       
 
             final_export, error_report = process_file(
                 input_path,
@@ -659,16 +688,29 @@ def run_csv_formatter():
                         start:start + batch_size
                     ]
 
+                    batch_df = batch_df.copy()
+
+                    if "SOURCE SHEET NAME" in batch_df.columns:
+                        batch_df = batch_df.drop(
+                            columns=["SOURCE SHEET NAME"]
+                        )
+
+                    batch_name = (
+                        f"{original_file_name}"
+                        f"_BATCH_{idx}"
+                        f"_{len(batch_df)}_PAX.xlsx"
+                    )
+
                     batch_files.append(
                         {       
-                            "name": f"Batch_{idx}_{len(batch_df)}_PAX.xlsx",
+                            "name": batch_name,
                             "data": batch_df.copy()
                         }
                     )
 
                     batch_summary.append(
                         {
-                            "batch": idx,
+                            "name": batch_name,
                             "records": len(batch_df)
                         }
                     )
@@ -682,6 +724,7 @@ def run_csv_formatter():
                 "batch_summary": batch_summary,
                 "split_batches": split_batches,
                 "batch_size": batch_size,
+                "original_file_name": original_file_name,
             }
 
     result = st.session_state.get("csv_formatter_result")
@@ -689,6 +732,11 @@ def run_csv_formatter():
         final_export = result["final_export"]
         error_report = result["error_report"]
         portal_key = result["portal_key"]
+
+        original_file_name = result.get(
+            "original_file_name",
+            "OUTPUT"
+        )
 
         batch_files = result.get("batch_files",[])
 
@@ -715,18 +763,16 @@ def run_csv_formatter():
                 f"Total Batches: {len(batch_summary)}"
             )
 
+            
+
             for batch in batch_summary:
 
-                st.write(f"Batch_{batch['batch']}_{batch['records']}_PAX.xlsx")
+                st.write(batch["name"])
 
         st.subheader("Preview")
         st.dataframe(final_export.head(), use_container_width=True)
 
-        base_name = st.text_input(
-            "Output file name",
-            value="dolphin_portal_output" if portal_key == "new" else "global_portal_output",
-            help="Enter the name before clicking download.",
-        )
+        
 
         highlighted_xlsx = build_highlighted_excel(final_export, error_report, portal_key)
 
@@ -734,27 +780,27 @@ def run_csv_formatter():
             st.download_button(
                 "Download Dolphin Portal XLSX",
                 highlighted_xlsx,
-                file_name=clean_download_name(base_name, "xlsx"),
+                file_name=f"{original_file_name}_FORMATTED.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
             st.download_button(
                 "Download Global Portal XLSX",
                 highlighted_xlsx,
-                file_name=clean_download_name(base_name, "xlsx"),
+                file_name=f"{original_file_name}_FORMATTED.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
             st.download_button(
                 "Download Global Portal CSV",
                 final_export.to_csv(index=False),
-                file_name=clean_download_name(base_name, "csv"),
+                file_name=f"{original_file_name}_GLOBAL.csv",
                 mime="text/csv",
             )
 
         st.download_button(
             "Download Error Report",
             error_report.to_csv(index=False),
-            file_name="error_report.csv",
+            file_name=f"{original_file_name}_ERROR_REPORT.csv",
             mime="text/csv",
         )
 

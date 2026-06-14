@@ -38,6 +38,26 @@ def export_old_portal(df):
         "gst_number": "Gstno",
     })
 
+    # Global Portal defaults
+
+    export_df["Address 2"] = (
+        export_df["Address 2"]
+        .fillna("")
+        .astype(str)
+        .replace("", ".")
+    )
+
+    export_df.loc[
+        (
+            export_df["Phone Number"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            == ""
+        ),
+        "Phone Number"
+    ] = export_df["Mobile Number"]
+
     return export_df
 
 

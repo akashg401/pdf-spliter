@@ -98,6 +98,8 @@ HEADER_MAPPING = {
     "arrival date": "end_date",
     "end date": "end_date",
     "return date": "end_date",
+    "arrival (return) date in india": "end_date",
+    "return date in india": "end_date",
 
     "dob": "dob",
     "d.o.b.": "dob",

@@ -104,6 +104,18 @@ def normalize_address(
 
     value = re.sub(r"[:;,]+", " ", value)
 
+    value = re.sub(
+        r"[|.:;]",
+        " ",
+        value
+    )
+
+    value = re.sub(
+        r"\s+",
+        " ",
+        value
+    )
+
     for item in [
         city,
         district,
@@ -235,6 +247,19 @@ def normalize_full_name(row):
     )
 
     name = re.sub(r"\s+", " ", name).strip()
+
+    name = re.sub(
+        r"[^A-Z\s]",
+        "",
+        name
+    )
+
+    name = re.sub(
+        r"\s+",
+        " ",
+        name
+    ).strip()
+
 
     return name
 
